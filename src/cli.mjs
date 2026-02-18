@@ -1,26 +1,74 @@
 #!/usr/bin/env node
 
 import process from 'node:process';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { PROFILES, runScaffold } from './scaffold.mjs';
 
 const MAJOR_PROVIDERS = ['openai', 'anthropic', 'gemini'];
 
+const FLAG_CONFIG = {
+  '--profile': { key: 'profile', type: 'value' },
+  '--project-name': { key: 'projectName', type: 'value' },
+  '--org': { key: 'org', type: 'value' },
+  '--repo': { key: 'repo', type: 'value' },
+  '--llm-provider': { key: 'llmProvider', type: 'value' },
+  '--build-knowledge': { key: 'buildKnowledge', type: 'boolean' },
+  '--force': { key: 'force', type: 'boolean' },
+  '--dry-run': { key: 'dryRun', type: 'boolean' },
+  '--yes': { key: 'yes', type: 'boolean' },
+  '--json': { key: 'json', type: 'boolean' },
+  '--write': { key: 'write', type: 'boolean' },
+  '--id': { key: 'sourceId', type: 'value' },
+  '--domain': { key: 'sourceDomain', type: 'value' },
+  '--owner': { key: 'sourceOwner', type: 'value' },
+  '--cadence': { key: 'sourceCadence', type: 'value' },
+  '--ttl': { key: 'sourceTtl', type: 'value' },
+  '--catalog': { key: 'catalogPath', type: 'value' }
+};
+
+function defaultOptions() {
+  return {
+    profile: 'foundation',
+    projectName: '',
+    org: 'your-org',
+    repo: '',
+    llmProvider: '',
+    buildKnowledge: false,
+    force: false,
+    dryRun: false,
+    yes: false,
+    json: false,
+    write: false,
+    sourceId: '',
+    sourceDomain: 'code',
+    sourceOwner: 'engineering',
+    sourceCadence: 'on_change',
+    sourceTtl: '720',
+    catalogPath: ''
+  };
+}
+
 function printHelp() {
   const profileList = PROFILES.join(', ');
   console.log(`
-klever-agentic - Generic Agentic Environment Scaffold
+klever - Generic Agentic Environment CLI
 
 Usage:
-  klever-agentic init [target-dir] [options]
-  klever-agentic wrap [target-dir] [options]
+  klever init [target-dir] [options]
+  klever wrap [target-dir] [options]
+  klever scan [target-dir] [options]
+  klever add <git-repository-url> [target-dir] [options]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
   wrap    Add agentic scaffold files to an existing repository.
+  scan    Inspect workspace readiness and context-engineering baseline.
+  add     Register an external repository source in context catalog.
 
-Options:
+Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
   --project-name <name>    Display name used in templates.
   --org <name>             GitHub organization/user placeholder.
@@ -30,6 +78,20 @@ Options:
   --force                  Overwrite files that already exist.
   --dry-run                Print planned changes without writing files.
   --yes                    Non-interactive mode.
+
+Scan options:
+  --json                   Print JSON output.
+  --write                  Persist scan report to context-engineering/scan/scan-summary.json.
+
+Add options:
+  --id <value>             Source id override.
+  --domain <value>         Source domain (default: code).
+  --owner <value>          Source owner (default: engineering).
+  --cadence <value>        Refresh cadence (default: on_change).
+  --ttl <hours>            TTL in hours (default: 720).
+  --catalog <path>         Custom catalog path.
+
+General:
   -h, --help               Show this help.
 `);
 }
@@ -37,17 +99,7 @@ Options:
 function parseArgs(argv) {
   const result = {
     positional: [],
-    options: {
-      profile: 'foundation',
-      projectName: '',
-      org: 'your-org',
-      repo: '',
-      llmProvider: '',
-      buildKnowledge: false,
-      force: false,
-      dryRun: false,
-      yes: false
-    }
+    options: defaultOptions()
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -63,23 +115,13 @@ function parseArgs(argv) {
       continue;
     }
 
-    if (token === '--force') {
-      result.options.force = true;
-      continue;
+    const config = FLAG_CONFIG[token];
+    if (!config) {
+      throw new Error(`Unknown option: ${token}`);
     }
 
-    if (token === '--dry-run') {
-      result.options.dryRun = true;
-      continue;
-    }
-
-    if (token === '--yes') {
-      result.options.yes = true;
-      continue;
-    }
-
-    if (token === '--build-knowledge') {
-      result.options.buildKnowledge = true;
+    if (config.type === 'boolean') {
+      result.options[config.key] = true;
       continue;
     }
 
@@ -88,37 +130,8 @@ function parseArgs(argv) {
       throw new Error(`Missing value for ${token}`);
     }
 
-    if (token === '--profile') {
-      result.options.profile = nextValue;
-      i += 1;
-      continue;
-    }
-
-    if (token === '--project-name') {
-      result.options.projectName = nextValue;
-      i += 1;
-      continue;
-    }
-
-    if (token === '--org') {
-      result.options.org = nextValue;
-      i += 1;
-      continue;
-    }
-
-    if (token === '--repo') {
-      result.options.repo = nextValue;
-      i += 1;
-      continue;
-    }
-
-    if (token === '--llm-provider') {
-      result.options.llmProvider = nextValue;
-      i += 1;
-      continue;
-    }
-
-    throw new Error(`Unknown option: ${token}`);
+    result.options[config.key] = nextValue;
+    i += 1;
   }
 
   return result;
@@ -244,16 +257,14 @@ async function collectLlmSetup(options) {
     if (configured.length === 1) {
       provider = configured[0];
     } else if (configured.length > 1) {
-      if (interactive) {
-        provider = normalizeProvider(
-          await promptLine(
-            `Multiple provider keys detected (${configured.join(', ')}). Select provider`,
-            configured[0]
+      provider = interactive
+        ? normalizeProvider(
+            await promptLine(
+              `Multiple provider keys detected (${configured.join(', ')}). Select provider`,
+              configured[0]
+            )
           )
-        );
-      } else {
-        provider = configured[0];
-      }
+        : configured[0];
     } else if (interactive) {
       provider = normalizeProvider(await promptLine('No provider key found in environment. Select provider', 'openai'));
     } else {
@@ -268,7 +279,6 @@ async function collectLlmSetup(options) {
   }
 
   let token = getProviderToken(provider);
-
   if (!token) {
     if (!interactive) {
       throw new Error(
@@ -285,13 +295,11 @@ async function collectLlmSetup(options) {
   }
 
   process.env.LLM_PROVIDER = provider;
-
   return { provider };
 }
 
 async function shouldBuildKnowledge(options, profile) {
-  const supportsKnowledge = profile === 'context-ops' || profile === 'full';
-  if (!supportsKnowledge) {
+  if (!(profile === 'context-ops' || profile === 'full')) {
     return false;
   }
 
@@ -309,20 +317,222 @@ async function shouldBuildKnowledge(options, profile) {
 
 async function runKnowledgeBuild(targetDir, provider) {
   return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ['scripts/context/build_knowledge_layer.mjs', '--provider', provider],
-      {
-        cwd: targetDir,
-        stdio: 'inherit',
-        env: process.env
-      }
-    );
+    const child = spawn(process.execPath, ['scripts/context/build_knowledge_layer.mjs', '--provider', provider], {
+      cwd: targetDir,
+      stdio: 'inherit',
+      env: process.env
+    });
 
     child.on('close', (code) => {
       resolve(code === null ? 1 : code);
     });
   });
+}
+
+async function pathExists(targetPath) {
+  try {
+    await stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function walk(dirPath) {
+  const entries = await readdir(dirPath, { withFileTypes: true });
+  const files = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walk(fullPath)));
+      continue;
+    }
+    files.push(fullPath);
+  }
+
+  return files;
+}
+
+function slugifySourceId(input) {
+  const normalized = String(input)
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^git@/, '')
+    .replace(/[/:.#?=&]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return normalized || `source-${Date.now()}`;
+}
+
+async function runScanCommand(targetDir, options) {
+  const root = path.resolve(process.cwd(), targetDir);
+
+  if (!(await pathExists(root))) {
+    throw new Error(`Target directory not found: ${root}`);
+  }
+
+  const checks = {
+    hasAgents: await pathExists(path.join(root, 'AGENTS.md')),
+    hasAgentContext: await pathExists(path.join(root, 'agent-context.json')),
+    hasPreflight: await pathExists(path.join(root, 'scripts', 'ci', 'preflight.sh')),
+    hasContextWorkspace: await pathExists(path.join(root, 'context-engineering')),
+    hasCatalog: await pathExists(path.join(root, 'context-engineering', 'sources', 'catalog.yaml')),
+    hasKnowledgeBuilder: await pathExists(path.join(root, 'scripts', 'context', 'build_knowledge_layer.mjs')),
+    hasMcpConfig: await pathExists(path.join(root, '.vscode', 'mcp.json')),
+    hasSkillsCatalog: await pathExists(path.join(root, 'skills', 'catalog.yaml'))
+  };
+
+  let sourceFiles = 0;
+  const sourcesDir = path.join(root, 'context-engineering', 'sources');
+  if (await pathExists(sourcesDir)) {
+    sourceFiles = (await walk(sourcesDir)).length;
+  }
+
+  let profileGuess = 'unknown';
+  if (checks.hasMcpConfig && checks.hasSkillsCatalog) {
+    profileGuess = 'full';
+  } else if (checks.hasKnowledgeBuilder && checks.hasCatalog) {
+    profileGuess = 'context-ops';
+  } else if (checks.hasAgents && checks.hasAgentContext) {
+    profileGuess = 'foundation';
+  }
+
+  const required = ['hasAgents', 'hasAgentContext', 'hasPreflight'];
+  const passedRequired = required.filter((key) => checks[key]).length;
+  const readinessScore = Math.round((passedRequired / required.length) * 100);
+
+  const report = {
+    scanned_at: new Date().toISOString(),
+    target: root,
+    profile_guess: profileGuess,
+    readiness_score: readinessScore,
+    checks,
+    source_file_count: sourceFiles
+  };
+
+  if (options.write) {
+    const scanDir = path.join(root, 'context-engineering', 'scan');
+    await mkdir(scanDir, { recursive: true });
+    await writeFile(path.join(scanDir, 'scan-summary.json'), JSON.stringify(report, null, 2), 'utf8');
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log('Scan Summary');
+    console.log(`- Target: ${report.target}`);
+    console.log(`- Profile guess: ${report.profile_guess}`);
+    console.log(`- Readiness score: ${report.readiness_score}`);
+    console.log(`- Source files: ${report.source_file_count}`);
+    for (const [key, value] of Object.entries(checks)) {
+      console.log(`- ${key}: ${value ? 'yes' : 'no'}`);
+    }
+    if (options.write) {
+      console.log('- Report written to: context-engineering/scan/scan-summary.json');
+    }
+  }
+}
+
+async function ensureCatalog(catalogPath) {
+  if (await pathExists(catalogPath)) {
+    return;
+  }
+
+  await mkdir(path.dirname(catalogPath), { recursive: true });
+  const skeleton = `version: 1\nupdated_at: ${new Date().toISOString().slice(0, 10)}\n\nsources:\n`;
+  await writeFile(catalogPath, skeleton, 'utf8');
+}
+
+async function runAddCommand(source, targetDir, options) {
+  const root = path.resolve(process.cwd(), targetDir);
+  const catalogPath = options.catalogPath
+    ? path.resolve(root, options.catalogPath)
+    : path.join(root, 'context-engineering', 'sources', 'catalog.yaml');
+
+  await ensureCatalog(catalogPath);
+
+  const sourceId = options.sourceId || slugifySourceId(source);
+  const domain = options.sourceDomain || 'code';
+  const owner = options.sourceOwner || 'engineering';
+  const cadence = options.sourceCadence || 'on_change';
+  const ttl = Number.parseInt(options.sourceTtl || '720', 10) || 720;
+
+  const current = await readFile(catalogPath, 'utf8');
+  if (current.includes(`- id: ${sourceId}`)) {
+    throw new Error(`Source id already exists in catalog: ${sourceId}`);
+  }
+
+  const block = [
+    '',
+    `  - id: ${sourceId}`,
+    `    domain: ${domain}`,
+    '    authority: supporting',
+    `    owner: ${owner}`,
+    '    refresh:',
+    `      cadence: ${cadence}`,
+    `      ttl_hours: ${ttl}`,
+    '    collector:',
+    '      script: manual',
+    '      mode: manual',
+    '    inputs:',
+    `      - path: ${source}`,
+    '    sensitivity:',
+    '      class: safe',
+    `      notes: added by klever add on ${new Date().toISOString().slice(0, 10)}`,
+    ''
+  ].join('\n');
+
+  let next = current;
+  const insertionMarker = '\nrequired_domains:';
+  if (current.includes(insertionMarker)) {
+    next = current.replace(insertionMarker, `${block}${insertionMarker}`);
+  } else {
+    next = `${current.replace(/\s*$/, '')}${block}`;
+  }
+
+  await writeFile(catalogPath, next, 'utf8');
+
+  console.log('Source added to catalog');
+  console.log(`- Catalog: ${catalogPath}`);
+  console.log(`- id: ${sourceId}`);
+  console.log(`- source: ${source}`);
+}
+
+async function runScaffoldCommand(command, targetArg, options) {
+  if (!PROFILES.includes(options.profile)) {
+    throw new Error(`Invalid profile "${options.profile}". Use one of: ${PROFILES.join(', ')}`);
+  }
+
+  const llmSetup = await collectLlmSetup(options);
+  const summary = await runScaffold({
+    mode: command,
+    targetDir: targetArg,
+    ...options,
+    llmProvider: llmSetup.provider
+  });
+
+  console.log('\nScaffold completed');
+  console.log(`- Mode: ${command}`);
+  console.log(`- Profile: ${options.profile}`);
+  console.log(`- Target: ${summary.targetDir}`);
+  console.log(`- Created: ${summary.created}`);
+  console.log(`- Overwritten: ${summary.overwritten}`);
+  console.log(`- Skipped: ${summary.skipped}`);
+  console.log(`- LLM provider: ${llmSetup.provider}`);
+  if (options.dryRun) {
+    console.log('- Dry-run: no files were written');
+  }
+
+  if (!options.dryRun && (await shouldBuildKnowledge(options, options.profile))) {
+    console.log('\nRunning initial knowledge-layer build...');
+    const exitCode = await runKnowledgeBuild(summary.targetDir, llmSetup.provider);
+    if (exitCode !== 0) {
+      console.warn('Warning: knowledge-layer build failed. You can rerun manually with:');
+      console.warn('  node scripts/context/build_knowledge_layer.mjs --provider <openai|anthropic|gemini>');
+    }
+  }
 }
 
 async function main() {
@@ -348,53 +558,32 @@ async function main() {
     return;
   }
 
-  const [command, targetArg = '.'] = parsed.positional;
-
-  if (!['init', 'wrap'].includes(command)) {
-    console.error(`Error: Unknown command "${command}"`);
-    printHelp();
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!PROFILES.includes(parsed.options.profile)) {
-    console.error(
-      `Error: Invalid profile "${parsed.options.profile}". Use one of: ${PROFILES.join(', ')}`
-    );
-    process.exitCode = 1;
-    return;
-  }
+  const command = parsed.positional[0];
 
   try {
-    const llmSetup = await collectLlmSetup(parsed.options);
-
-    const summary = await runScaffold({
-      mode: command,
-      targetDir: targetArg,
-      ...parsed.options,
-      llmProvider: llmSetup.provider
-    });
-
-    console.log('\nScaffold completed');
-    console.log(`- Mode: ${command}`);
-    console.log(`- Profile: ${parsed.options.profile}`);
-    console.log(`- Target: ${summary.targetDir}`);
-    console.log(`- Created: ${summary.created}`);
-    console.log(`- Overwritten: ${summary.overwritten}`);
-    console.log(`- Skipped: ${summary.skipped}`);
-    console.log(`- LLM provider: ${llmSetup.provider}`);
-    if (parsed.options.dryRun) {
-      console.log('- Dry-run: no files were written');
+    if (command === 'init' || command === 'wrap') {
+      const targetArg = parsed.positional[1] || '.';
+      await runScaffoldCommand(command, targetArg, parsed.options);
+      return;
     }
 
-    if (!parsed.options.dryRun && (await shouldBuildKnowledge(parsed.options, parsed.options.profile))) {
-      console.log('\nRunning initial knowledge-layer build...');
-      const exitCode = await runKnowledgeBuild(summary.targetDir, llmSetup.provider);
-      if (exitCode !== 0) {
-        console.warn('Warning: knowledge-layer build failed. You can rerun manually with:');
-        console.warn('  node scripts/context/build_knowledge_layer.mjs --provider <openai|anthropic|gemini>');
+    if (command === 'scan') {
+      const targetArg = parsed.positional[1] || '.';
+      await runScanCommand(targetArg, parsed.options);
+      return;
+    }
+
+    if (command === 'add') {
+      const source = parsed.positional[1];
+      if (!source) {
+        throw new Error('Usage: klever add <git-repository-url> [target-dir] [options]');
       }
+      const targetArg = parsed.positional[2] || '.';
+      await runAddCommand(source, targetArg, parsed.options);
+      return;
     }
+
+    throw new Error(`Unknown command "${command}"`);
   } catch (error) {
     console.error(`Error: ${error.message}`);
     process.exitCode = 1;
