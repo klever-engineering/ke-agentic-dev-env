@@ -28,7 +28,9 @@ const FLAG_CONFIG = {
   '--owner': { key: 'sourceOwner', type: 'value' },
   '--cadence': { key: 'sourceCadence', type: 'value' },
   '--ttl': { key: 'sourceTtl', type: 'value' },
-  '--catalog': { key: 'catalogPath', type: 'value' }
+  '--catalog': { key: 'catalogPath', type: 'value' },
+  '--scan-executor': { key: 'scanExecutor', type: 'value' },
+  '--scan-method': { key: 'scanMethod', type: 'value' }
 };
 
 function defaultOptions() {
@@ -49,7 +51,9 @@ function defaultOptions() {
     sourceOwner: 'engineering',
     sourceCadence: 'on_change',
     sourceTtl: '720',
-    catalogPath: ''
+    catalogPath: '',
+    scanExecutor: 'auto',
+    scanMethod: 'deep'
   };
 }
 
@@ -84,6 +88,8 @@ Init/Wrap options:
 Scan options:
   --json                   Print JSON output.
   --write                  Persist scan report to context-engineering/scan/scan-summary.json.
+  --scan-executor <name>   auto | llm-api | codex | copilot | claude | gemini.
+  --scan-method <name>     quick | deep (default: deep).
 
 Add options:
   --id <value>             Source id override.
@@ -397,6 +403,24 @@ async function runProcess(command, args, cwd, env = process.env) {
   });
 }
 
+async function runQuietProcess(command, args, cwd, env = process.env) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: 'ignore'
+    });
+
+    child.on('error', () => resolve(1));
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+}
+
+async function commandExists(command, root) {
+  const code = await runQuietProcess('bash', ['-lc', `command -v ${command} >/dev/null 2>&1`], root);
+  return code === 0;
+}
+
 async function cloneRepositoryIntoWorkspace(source, root) {
   const repositoriesDir = path.join(root, 'repositories');
   await mkdir(repositoriesDir, { recursive: true });
@@ -429,6 +453,234 @@ async function cloneRepositoryIntoWorkspace(source, root) {
   }
 
   return { destination, repoName, cloned };
+}
+
+function normalizeScanMethod(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (value === 'quick' || value === 'deep') {
+    return value;
+  }
+  return '';
+}
+
+function normalizeScanExecutor(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (['auto', 'llm-api', 'codex', 'copilot', 'claude', 'gemini'].includes(value)) {
+    return value;
+  }
+  return '';
+}
+
+async function detectLocalCodingAgents(root) {
+  const detected = [];
+
+  if (await commandExists('codex', root)) {
+    detected.push({ id: 'codex', label: 'Codex CLI', command: 'codex' });
+  }
+  if (await commandExists('claude', root)) {
+    detected.push({ id: 'claude', label: 'Claude CLI', command: 'claude' });
+  }
+  if (await commandExists('gemini', root)) {
+    detected.push({ id: 'gemini', label: 'Gemini CLI', command: 'gemini' });
+  }
+
+  if (await commandExists('gh', root)) {
+    const copilotCode = await runQuietProcess('gh', ['copilot', '--help'], root);
+    if (copilotCode === 0) {
+      detected.push({ id: 'copilot', label: 'GitHub Copilot CLI', command: 'gh copilot' });
+    }
+  }
+
+  return detected;
+}
+
+async function selectScanExecution(options, root) {
+  const interactive = process.stdin.isTTY && process.stdout.isTTY && !options.yes;
+  const detectedAgents = await detectLocalCodingAgents(root);
+  let executor = normalizeScanExecutor(options.scanExecutor || 'auto') || 'auto';
+  let method = normalizeScanMethod(options.scanMethod || 'deep') || 'deep';
+
+  if (executor === 'auto') {
+    executor = 'llm-api';
+    if (interactive && detectedAgents.length > 0) {
+      console.log(`Detected local coding agents: ${detectedAgents.map((item) => item.id).join(', ')}`);
+      const answer = await promptLine(
+        'Select scan executor (llm-api|' + detectedAgents.map((item) => item.id).join('|') + ')',
+        'llm-api'
+      );
+      const selected = normalizeScanExecutor(answer);
+      if (selected) {
+        executor = selected;
+      }
+    }
+  }
+
+  if (!['llm-api', 'codex', 'copilot', 'claude', 'gemini'].includes(executor)) {
+    throw new Error(`Invalid scan executor: ${executor}`);
+  }
+
+  if (interactive) {
+    const answer = await promptLine('Select scan method (quick|deep)', method);
+    const selected = normalizeScanMethod(answer);
+    if (selected) {
+      method = selected;
+    }
+  }
+
+  return { executor, method, detectedAgents };
+}
+
+function detectTechSignals(summary) {
+  const extSet = new Set((summary.top_extensions || []).map((item) => item.ext));
+  return {
+    frontend: ['.tsx', '.jsx', '.vue', '.svelte', '.html', '.css', '.scss'].some((ext) => extSet.has(ext)),
+    infrastructure: ['.tf', '.hcl'].some((ext) => extSet.has(ext)),
+    sql: extSet.has('.sql'),
+    scripting: ['.sh', '.ps1'].some((ext) => extSet.has(ext)),
+    python: summary.key_files.pyproject_toml || summary.key_files.requirements_txt || extSet.has('.py'),
+    node: summary.key_files.package_json || extSet.has('.js') || extSet.has('.ts')
+  };
+}
+
+function buildMcpSuggestionsForSummary(summary) {
+  const tech = detectTechSignals(summary);
+  const suggestions = [{ server: 'github', reason: 'Issue/PR/repository workflow for delivery operations.' }];
+
+  if (tech.frontend) {
+    suggestions.push({ server: 'chrome-devtools', reason: 'Frontend stack detected; useful for UI inspection and debugging.' });
+  }
+  if (tech.sql || tech.python) {
+    suggestions.push({ server: 'postgres', reason: 'Data-layer signals detected (.sql/Python backend). Useful for schema and query context.' });
+  }
+  if (tech.infrastructure || summary.key_files.dockerfile || summary.key_files.docker_compose) {
+    suggestions.push({ server: 'infrastructure', reason: 'Infrastructure/runtime signals detected (Docker/Terraform/K8s style files).' });
+  }
+  if (tech.node) {
+    suggestions.push({ server: 'npm-docs', reason: 'Node ecosystem detected; package and script references are useful context sources.' });
+  }
+
+  return suggestions;
+}
+
+function renderMcpSuggestionsMarkdown(data) {
+  const lines = ['# MCP Suggestions', ''];
+  lines.push(`- generated_at: ${data.generated_at}`);
+  lines.push(`- repositories_scanned: ${data.repositories_scanned}`);
+  lines.push('');
+  for (const repo of data.repositories) {
+    lines.push(`## ${repo.repository}`);
+    lines.push('');
+    for (const suggestion of repo.suggestions) {
+      lines.push(`- ${suggestion.server}: ${suggestion.reason}`);
+    }
+    if (repo.suggestions.length === 0) {
+      lines.push('- none');
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
+}
+
+async function buildDeepRepositoryArtifacts(root, repositoryContext) {
+  const outDir = path.join(root, 'context-engineering', 'sources', 'repositories');
+  await mkdir(outDir, { recursive: true });
+
+  const sourceMap = {
+    generated_at: new Date().toISOString(),
+    repositories_scanned: repositoryContext.scannedCount,
+    repositories: (repositoryContext.summaries || []).map((summary) => ({
+      repository: summary.repository_name,
+      path: summary.repository_relative_path,
+      files: summary.files,
+      directories: summary.directories,
+      key_files: summary.key_files,
+      top_extensions: summary.top_extensions
+    }))
+  };
+
+  const mcpSuggestions = {
+    generated_at: new Date().toISOString(),
+    repositories_scanned: repositoryContext.scannedCount,
+    repositories: (repositoryContext.summaries || []).map((summary) => ({
+      repository: summary.repository_name,
+      suggestions: buildMcpSuggestionsForSummary(summary)
+    }))
+  };
+
+  const sourceMapPath = path.join(outDir, 'source-map.json');
+  const mcpJsonPath = path.join(outDir, 'mcp-suggestions.json');
+  const mcpMdPath = path.join(outDir, 'mcp-suggestions.md');
+  await writeFile(sourceMapPath, JSON.stringify(sourceMap, null, 2), 'utf8');
+  await writeFile(mcpJsonPath, JSON.stringify(mcpSuggestions, null, 2), 'utf8');
+  await writeFile(mcpMdPath, renderMcpSuggestionsMarkdown(mcpSuggestions), 'utf8');
+
+  return {
+    source_map: path.relative(root, sourceMapPath),
+    mcp_suggestions_json: path.relative(root, mcpJsonPath),
+    mcp_suggestions_markdown: path.relative(root, mcpMdPath)
+  };
+}
+
+function renderDelegatedScanPrompt(root, executor, method, report, repositoryContext, deepArtifacts) {
+  const lines = [];
+  lines.push(`# Delegated Scan Request (${executor})`);
+  lines.push('');
+  lines.push('You are a coding agent operating inside an agentic workspace managed by klever.');
+  lines.push('Perform repository scan and context-engineering enrichment using the inputs below.');
+  lines.push('');
+  lines.push('## Inputs');
+  lines.push('');
+  lines.push(`- workspace_root: \`${root}\``);
+  lines.push(`- scan_method: ${method}`);
+  lines.push(`- repositories_scanned: ${repositoryContext.scannedCount}`);
+  lines.push(`- repository_index: \`${report.repository_artifact_index || 'context-engineering/sources/repositories/index.json'}\``);
+  lines.push(`- source_map: \`${deepArtifacts.source_map}\``);
+  lines.push(`- mcp_suggestions: \`${deepArtifacts.mcp_suggestions_json}\``);
+  lines.push('');
+  lines.push('## Required Outputs');
+  lines.push('');
+  lines.push('- Refined source map with entrypoints, modules, and integration boundaries.');
+  lines.push('- Recommended MCP server set with reasons and expected usage patterns.');
+  lines.push('- Updated AGENTS.md operational guidance for repository workflows.');
+  lines.push('- Scan notes at `context-engineering/scan/delegated-scan-notes.md`.');
+  lines.push('');
+  lines.push('## Constraints');
+  lines.push('');
+  lines.push('- Do not store secrets in repository files.');
+  lines.push('- Keep artifacts deterministic and reproducible.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function prepareDelegatedScan(root, executor, method, report, repositoryContext, deepArtifacts) {
+  const outDir = path.join(root, 'context-engineering', 'scan');
+  await mkdir(outDir, { recursive: true });
+  const promptPath = path.join(outDir, 'delegated-scan-request.md');
+  const prompt = renderDelegatedScanPrompt(root, executor, method, report, repositoryContext, deepArtifacts);
+  await writeFile(promptPath, prompt, 'utf8');
+  return path.relative(root, promptPath);
+}
+
+async function runLlmBestEffortScan(root, options, report) {
+  const llmSetup = await collectLlmSetup(options);
+  const hasKnowledgeBuilder = await pathExists(path.join(root, 'scripts', 'context', 'build_knowledge_layer.mjs'));
+
+  if (!hasKnowledgeBuilder) {
+    return {
+      mode: 'llm-api',
+      provider: llmSetup.provider,
+      status: 'skipped',
+      reason: 'knowledge_builder_not_found'
+    };
+  }
+
+  const code = await runKnowledgeBuild(root, llmSetup.provider);
+  return {
+    mode: 'llm-api',
+    provider: llmSetup.provider,
+    status: code === 0 ? 'completed' : 'failed',
+    exit_code: code
+  };
 }
 
 async function summarizeRepository(repoPath) {
@@ -734,6 +986,8 @@ async function runScanCommand(targetDir, options) {
     throw new Error(`Target directory not found: ${root}`);
   }
 
+  const scanExecution = await selectScanExecution(options, root);
+
   const checks = {
     hasAgents: await pathExists(path.join(root, 'AGENTS.md')),
     hasAgentContext: await pathExists(path.join(root, 'agent-context.json')),
@@ -779,6 +1033,33 @@ async function runScanCommand(targetDir, options) {
   if (repositoryContext.indexPath) {
     report.repository_artifact_index = repositoryContext.indexPath;
   }
+  report.scan_execution = {
+    executor: scanExecution.executor,
+    method: scanExecution.method,
+    detected_local_agents: scanExecution.detectedAgents.map((item) => item.id)
+  };
+  const deepArtifacts = await buildDeepRepositoryArtifacts(root, repositoryContext);
+  report.deep_artifacts = deepArtifacts;
+
+  if (scanExecution.executor === 'llm-api') {
+    report.scan_execution_result = await runLlmBestEffortScan(root, options, report);
+  } else {
+    const delegatedPromptPath = await prepareDelegatedScan(
+      root,
+      scanExecution.executor,
+      scanExecution.method,
+      report,
+      repositoryContext,
+      deepArtifacts
+    );
+    report.scan_execution_result = {
+      mode: 'delegated-agent',
+      agent: scanExecution.executor,
+      status: 'prepared',
+      prompt_path: delegatedPromptPath
+    };
+  }
+
   const agentsResult = await ensureAgentsHandbook(root, report, repositoryContext);
   if (agentsResult.created || agentsResult.updated) {
     checks.hasAgents = true;
@@ -806,6 +1087,19 @@ async function runScanCommand(targetDir, options) {
     console.log(`- repositories_scanned: ${report.repositories_scanned}`);
     if (report.repository_artifact_index) {
       console.log(`- repository_artifact_index: ${report.repository_artifact_index}`);
+    }
+    console.log(`- scan_executor: ${report.scan_execution.executor}`);
+    console.log(`- scan_method: ${report.scan_execution.method}`);
+    console.log(`- deep_source_map: ${report.deep_artifacts.source_map}`);
+    console.log(`- mcp_suggestions: ${report.deep_artifacts.mcp_suggestions_json}`);
+    if (report.scan_execution_result?.prompt_path) {
+      console.log(`- delegated_prompt: ${report.scan_execution_result.prompt_path}`);
+    }
+    if (report.scan_execution_result?.provider) {
+      console.log(`- llm_provider: ${report.scan_execution_result.provider}`);
+    }
+    if (report.scan_execution_result?.status) {
+      console.log(`- scan_execution_status: ${report.scan_execution_result.status}`);
     }
     console.log(`- agents_handbook: ${report.agents_handbook}`);
     console.log(`- agents_handbook_updated: ${report.agents_handbook_updated ? 'yes' : 'no'}`);
