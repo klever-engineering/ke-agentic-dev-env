@@ -1,0 +1,23 @@
+# Runtime/env
+.env
+.env.*.local
+.env.local
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+.vscode/settings.json
+
+# Context outputs
+context-engineering/scan/
+context-engineering/sources/**/raw/
+
+# Reports
+reports/

@@ -1,0 +1,17 @@
+version: 1
+entries:
+  - id: github-issue-ops
+    source: tier-a
+    owner: engineering
+    version: 0.1.0
+    clients: [codex, copilot, claude]
+    permissions: read-only
+    risk_notes: "Escalate to HITL for write actions"
+
+  - id: context-ops-collector
+    source: tier-a
+    owner: platform
+    version: 0.1.0
+    clients: [codex, copilot]
+    permissions: low-risk-write
+    risk_notes: "Writes only under context-engineering snapshots"

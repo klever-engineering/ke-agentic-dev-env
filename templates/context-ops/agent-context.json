@@ -1,0 +1,142 @@
+{
+  "$schema": "./schemas/agent-context.schema.json",
+  "version": "2.0.0",
+  "workspace": {
+    "name": "__REPO_NAME__",
+    "purpose": "Generic agentic development environment with Context Ops",
+    "root_path": ".",
+    "prohibited_paths": [
+      {
+        "path": ".git",
+        "reason": "Git internals"
+      },
+      {
+        "path": "context-engineering/scan",
+        "reason": "Generated diagnostic outputs"
+      }
+    ],
+    "risk_sensitive_areas": [
+      {
+        "area": ".github/workflows",
+        "risk_level": "critical",
+        "description": "Automation and deployment behavior",
+        "mitigation": "Review with HITL for high/critical changes"
+      },
+      {
+        "area": "scripts/context",
+        "risk_level": "high",
+        "description": "Collectors and validation gates affecting context reliability",
+        "mitigation": "Use read-only defaults and redaction policy"
+      }
+    ]
+  },
+  "documentation": {
+    "governance": [
+      {
+        "name": "Agent Handbook",
+        "path": "AGENTS.md",
+        "purpose": "Primary operations policy"
+      },
+      {
+        "name": "Context Ops Program",
+        "path": "doc/agents/context-engineering/context-ops-program.md",
+        "purpose": "Context lifecycle policy"
+      }
+    ],
+    "playbooks": [
+      {
+        "name": "Bugfix",
+        "path": "doc/agents/playbooks/bugfix.md",
+        "workflow_type": "reactive"
+      },
+      {
+        "name": "Incident Response",
+        "path": "doc/agents/playbooks/incident-response.md",
+        "workflow_type": "reactive"
+      },
+      {
+        "name": "Endpoint/Service Change",
+        "path": "doc/agents/playbooks/endpoint-service-change.md",
+        "workflow_type": "proactive"
+      },
+      {
+        "name": "Refactor",
+        "path": "doc/agents/playbooks/refactor.md",
+        "workflow_type": "proactive"
+      },
+      {
+        "name": "Release Prep",
+        "path": "doc/agents/playbooks/release-prep.md",
+        "workflow_type": "release"
+      }
+    ]
+  },
+  "context_sources": {
+    "version": "1.0.0",
+    "schema": "schemas/context-snapshot.schema.json",
+    "catalog": "context-engineering/sources/catalog.yaml",
+    "domains": {
+      "infrastructure": {
+        "owner": "platform-team",
+        "ttl_hours": 24,
+        "refresh_cadence": "daily",
+        "collector": "scripts/context/collect_infrastructure.sh"
+      },
+      "aws": {
+        "owner": "platform-team",
+        "ttl_hours": 168,
+        "refresh_cadence": "weekly",
+        "collector": "scripts/context/collect_aws.sh"
+      },
+      "grafana": {
+        "owner": "observability-team",
+        "ttl_hours": 24,
+        "refresh_cadence": "daily",
+        "collector": "scripts/context/collect_grafana.sh"
+      },
+      "network": {
+        "owner": "platform-team",
+        "ttl_hours": 24,
+        "refresh_cadence": "daily",
+        "collector": "scripts/context/collect_network.sh"
+      },
+      "code": {
+        "owner": "engineering",
+        "ttl_hours": 168,
+        "refresh_cadence": "per_merge_weekly",
+        "collector": "scripts/context/collect_code.sh"
+      },
+      "environment": {
+        "owner": "engineering",
+        "ttl_hours": 720,
+        "refresh_cadence": "on_change",
+        "collector": "scripts/context/collect_environment.sh"
+      }
+    },
+    "required_domains": ["code", "environment", "infrastructure", "network"],
+    "optional_domains": ["aws", "grafana"],
+    "collectors": {
+      "orchestrator": "scripts/context/collect_all.sh",
+      "validator": "scripts/context/validate_context.sh",
+      "knowledge_builder": "scripts/context/build_knowledge_layer.mjs"
+    },
+    "maintenance": {
+      "workflow": ".github/workflows/context-refresh.yml",
+      "runbook": "doc/agents/context-engineering/context-maintenance.md"
+    }
+  },
+  "scripts": {
+    "preflight": "scripts/ci/preflight.sh",
+    "context_validation": "scripts/context/validate_context.sh",
+    "agent_context_validation": "scripts/validate_agent_context.sh",
+    "llm_provider_validation": "scripts/ai/validate_provider.sh",
+    "secret_scan": "scripts/secret-scan.sh"
+  },
+  "validation_commands": [
+    "./scripts/ci/preflight.sh",
+    "./scripts/validate_agent_context.sh",
+    "./scripts/validate_markdown_links.sh",
+    "./scripts/ai/validate_provider.sh",
+    "./scripts/context/validate_context.sh"
+  ]
+}

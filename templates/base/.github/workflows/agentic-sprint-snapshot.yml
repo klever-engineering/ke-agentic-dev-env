@@ -1,0 +1,27 @@
+name: Agentic Sprint Snapshot
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture sprint snapshot
+        run: |
+          chmod +x scripts/metrics/capture_sprint_snapshot.sh
+          ./scripts/metrics/capture_sprint_snapshot.sh
+      - name: Commit snapshot
+        run: |
+          if git diff --quiet doc/agents/metrics/snapshots; then
+            echo "No changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add doc/agents/metrics/snapshots
+          git commit -m "metrics: sprint snapshot $(date -u +%Y-%m-%d)"
+          git push

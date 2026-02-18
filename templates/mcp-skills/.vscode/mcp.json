@@ -1,0 +1,24 @@
+{
+  "servers": {
+    "github": {
+      "type": "stdio",
+      "command": "./scripts/mcp/mcp-wrapper.sh",
+      "args": ["github"]
+    },
+    "docker": {
+      "type": "stdio",
+      "command": "./scripts/mcp/mcp-wrapper.sh",
+      "args": ["docker"]
+    },
+    "grafana": {
+      "type": "stdio",
+      "command": "./scripts/mcp/mcp-wrapper.sh",
+      "args": ["grafana"]
+    },
+    "firebase": {
+      "type": "stdio",
+      "command": "./scripts/mcp/mcp-wrapper.sh",
+      "args": ["firebase"]
+    }
+  }
+}

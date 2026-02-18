@@ -1,0 +1,196 @@
+version: 1
+updated_at: __DATE__
+
+# This file is the single source of truth for context ingestion design.
+# Keep source IDs stable so automation and reports can reference them reliably.
+sources:
+  - id: code-repo-map
+    domain: code
+    authority: canonical
+    owner: engineering-lead
+    refresh:
+      cadence: per-merge-weekly
+      ttl_hours: 168
+    collector:
+      script: scripts/context/collect_code.sh
+      mode: automated
+    inputs:
+      - path: AGENTS.md
+      - path: doc/
+      - path: scripts/
+      - path: .github/
+    sensitivity:
+      class: safe
+      notes: metadata only
+
+  - id: github-delivery-state
+    domain: code
+    authority: canonical
+    owner: delivery-lead
+    refresh:
+      cadence: daily
+      ttl_hours: 24
+    collector:
+      script: scripts/context/collect_code.sh
+      mode: automated
+    inputs:
+      - path: GitHub issues (open)
+      - path: GitHub pull requests (open)
+    dependencies:
+      - env: GITHUB_ORG
+      - env: GITHUB_REPO
+      - env: GITHUB_API_TOKEN
+    sensitivity:
+      class: redact-required
+      notes: store counts and references, avoid raw secret-bearing payloads
+
+  - id: runtime-infrastructure
+    domain: infrastructure
+    authority: canonical
+    owner: platform-lead
+    refresh:
+      cadence: daily
+      ttl_hours: 24
+    collector:
+      script: scripts/context/collect_infrastructure.sh
+      mode: automated
+    inputs:
+      - path: docker runtime
+      - path: host services
+    sensitivity:
+      class: redact-required
+      notes: redact private IPs and hostnames
+
+  - id: cloud-aws-topology
+    domain: aws
+    authority: canonical
+    owner: platform-lead
+    refresh:
+      cadence: weekly
+      ttl_hours: 168
+    collector:
+      script: scripts/context/collect_aws.sh
+      mode: automated
+    dependencies:
+      - env: AWS_ACCESS_KEY_ID
+      - env: AWS_SECRET_ACCESS_KEY
+    sensitivity:
+      class: redact-required
+      notes: redact account IDs and internal network details
+
+  - id: observability-grafana
+    domain: grafana
+    authority: canonical
+    owner: observability-lead
+    refresh:
+      cadence: daily
+      ttl_hours: 24
+    collector:
+      script: scripts/context/collect_grafana.sh
+      mode: automated
+    dependencies:
+      - env: GRAFANA_URL
+      - env: GRAFANA_API_TOKEN
+    sensitivity:
+      class: redact-required
+      notes: store inventories and status, avoid alert payload secrets
+
+  - id: network-dns-edge
+    domain: network
+    authority: canonical
+    owner: platform-lead
+    refresh:
+      cadence: daily
+      ttl_hours: 24
+    collector:
+      script: scripts/context/collect_network.sh
+      mode: automated
+    inputs:
+      - path: DNS records and endpoint resolution metadata
+    sensitivity:
+      class: safe
+      notes: public DNS metadata only
+
+  - id: local-toolchain-environment
+    domain: environment
+    authority: canonical
+    owner: platform-lead
+    refresh:
+      cadence: on-change
+      ttl_hours: 720
+    collector:
+      script: scripts/context/collect_environment.sh
+      mode: automated
+    inputs:
+      - path: local tool versions
+      - path: OS/runtime metadata
+    sensitivity:
+      class: safe
+      notes: never include secrets from env files
+
+  - id: curated-product-docs
+    domain: code
+    authority: supporting
+    owner: product-owner
+    refresh:
+      cadence: on-change
+      ttl_hours: 720
+    collector:
+      script: context-engineering/support/scripts/sync_doc_context.sh
+      mode: semi-automated
+    inputs:
+      - path: context-engineering/input/
+      - path: context-engineering/sources/odoo-docs/
+    sensitivity:
+      class: safe
+      notes: curated markdown only
+
+  - id: database-model-context
+    domain: code
+    authority: supporting
+    owner: data-owner
+    refresh:
+      cadence: weekly
+      ttl_hours: 168
+    collector:
+      script: context-engineering/support/scripts/build_db_model_context.sh
+      mode: semi-automated
+    inputs:
+      - path: context-engineering/sources/database-model/
+    sensitivity:
+      class: redact-required
+      notes: avoid row-level data; schema and model summaries only
+
+  - id: ai-knowledge-layer
+    domain: code
+    authority: derived
+    owner: software-process-agent
+    refresh:
+      cadence: on-demand
+      ttl_hours: 168
+    collector:
+      script: scripts/context/build_knowledge_layer.mjs
+      mode: automated
+    dependencies:
+      - env: LLM_PROVIDER
+      - env: OPENAI_API_KEY | ANTHROPIC_API_KEY | GEMINI_API_KEY
+    inputs:
+      - path: context-engineering/sources/
+      - path: doc/agents/context-engineering/
+      - path: agent-context.json
+    outputs:
+      - path: context-engineering/sources/knowledge/knowledge-layer.json
+      - path: context-engineering/sources/knowledge/knowledge-layer.md
+    sensitivity:
+      class: redact-required
+      notes: review AI outputs for leaked sensitive context before commit
+
+required_domains:
+  - code
+  - environment
+  - infrastructure
+  - network
+
+optional_domains:
+  - aws
+  - grafana
