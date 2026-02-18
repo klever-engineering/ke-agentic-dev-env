@@ -1,5 +1,9 @@
 # ke-agentic-dev-env-codex
 
+[![CI](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./CHANGELOG.md)
+
 Generic template repository and npm CLI scaffold for agentic development environments.
 
 ## Package intent
@@ -72,9 +76,17 @@ The most important reusable capability in this scaffold is context engineering:
 - `docs/capability-matrix.md`
 - `docs/context-engineering-findings.md`
 - `docs/architecture.md`
+- `docs/versioning-policy.md`
+- `CHANGELOG.md`
 
 ## Local test
 
 ```bash
 npm test
 ```
+
+## Release notes
+
+- Current release line: `v0.1.0`
+- Changelog: `CHANGELOG.md`
+- License: `LICENSE`

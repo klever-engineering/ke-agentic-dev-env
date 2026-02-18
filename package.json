@@ -3,8 +3,19 @@
   "version": "0.1.0",
   "description": "Bootstrap or wrap repositories with a generic agentic development environment",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/klever-engineering/ke-agentic-dev-env-codex.git"
+  },
+  "homepage": "https://github.com/klever-engineering/ke-agentic-dev-env-codex#readme",
+  "bugs": {
+    "url": "https://github.com/klever-engineering/ke-agentic-dev-env-codex/issues"
+  },
   "bin": {
     "klever-agentic": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "start": "node src/cli.mjs",
