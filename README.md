@@ -30,8 +30,8 @@ klever init <target-dir> --profile foundation
 # wrap an existing repository
 klever wrap <target-dir> --profile full
 
-# inspect current workspace readiness
-klever scan .
+# inspect workspace and generate scan artifacts
+klever scan . --scan-executor auto --scan-method deep
 
 # clone and register external source repository
 klever add https://github.com/your-org/your-repo.git
@@ -39,7 +39,15 @@ klever add https://github.com/your-org/your-repo.git
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
 
-`klever scan` scans cloned repositories and generates context artifacts under `context-engineering/sources/repositories/`.
+`klever scan` now:
+- detects local coding agents (`codex`, `copilot`, `claude`, `gemini`) and allows delegating scan execution
+- falls back to `llm-api` mode when delegation is not selected
+- generates deep artifacts under `context-engineering/sources/repositories/`:
+  - `source-map.json`
+  - `mcp-suggestions.json`
+  - `mcp-suggestions.md`
+- writes delegated scan prompt (when local agent mode is selected):
+  - `context-engineering/scan/delegated-scan-request.md`
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
 
