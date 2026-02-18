@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.2.0] - 2026-02-18
+
+### Added
+
+- `klever scan` executor orchestration:
+  - detect local coding agents (`codex`, `copilot`, `claude`, `gemini`)
+  - choose executor interactively or via flags (`--scan-executor`, `--scan-method`)
+  - delegate scan work by generating `context-engineering/scan/delegated-scan-request.md`
+- Deep scan artifact generation:
+  - `context-engineering/sources/repositories/source-map.json`
+  - `context-engineering/sources/repositories/mcp-suggestions.json`
+  - `context-engineering/sources/repositories/mcp-suggestions.md`
+- Scan reporting enhancements for execution mode, deep artifacts, and scan roots.
+- Automatic root `AGENTS.md` managed section refresh after `scan` and `add`.
+
+### Changed
+
+- Repository discovery for `klever scan` now auto-detects both `repository/` and `repositories/` folders.
+- `klever add` continues to clone into `repositories/` while scan supports legacy/singular layouts.
+
 ## [0.1.0] - 2026-02-18
 
 ### Added
