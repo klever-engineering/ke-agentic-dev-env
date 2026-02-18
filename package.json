@@ -12,6 +12,7 @@
     "url": "https://github.com/klever-engineering/ke-agentic-dev-env-codex/issues"
   },
   "bin": {
+    "klever": "src/cli.mjs",
     "klever-agentic": "src/cli.mjs"
   },
   "engines": {

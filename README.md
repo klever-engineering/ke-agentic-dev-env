@@ -13,7 +13,7 @@ Consolidate best practices from multiple internal agentic repositories into one 
 Implemented as CLI package:
 
 - package: `@klever/agentic-environment`
-- bin: `klever-agentic`
+- bin: `klever`
 
 Install style:
 
@@ -25,10 +25,16 @@ npm install -g @klever/agentic-environment
 
 ```bash
 # create a fresh environment
-node src/cli.mjs init <target-dir> --profile foundation
+klever init <target-dir> --profile foundation
 
 # wrap an existing repository
-node src/cli.mjs wrap <target-dir> --profile full
+klever wrap <target-dir> --profile full
+
+# inspect current workspace readiness
+klever scan .
+
+# register external source repository in context catalog
+klever add https://github.com/your-org/your-repo.git
 ```
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
