@@ -65,8 +65,8 @@ Usage:
 Commands:
   init    Create a fresh agentic workspace scaffold.
   wrap    Add agentic scaffold files to an existing repository.
-  scan    Inspect workspace readiness and context-engineering baseline.
-  add     Register an external repository source in context catalog.
+  scan    Inspect workspace readiness and build repository context artifacts.
+  add     Clone a repository into /repositories and register it in context catalog.
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
@@ -366,6 +366,220 @@ function slugifySourceId(input) {
   return normalized || `source-${Date.now()}`;
 }
 
+function parseRepositoryRef(source) {
+  const value = String(source).trim();
+
+  let match = value.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  if (match) {
+    return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+  }
+
+  match = value.match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (match) {
+    return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+  }
+
+  return null;
+}
+
+async function runProcess(command, args, cwd, env = process.env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env,
+      stdio: 'inherit'
+    });
+
+    child.on('error', reject);
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+}
+
+async function cloneRepositoryIntoWorkspace(source, root) {
+  const repositoriesDir = path.join(root, 'repositories');
+  await mkdir(repositoriesDir, { recursive: true });
+
+  const parsed = parseRepositoryRef(source);
+  const fallbackName = path.basename(String(source).replace(/\/+$/, '')).replace(/\.git$/i, '');
+  const repoName = parsed ? parsed.repo : fallbackName || slugifySourceId(source);
+  const destination = path.join(repositoriesDir, repoName);
+
+  if (await pathExists(destination)) {
+    return { destination, repoName, cloned: false };
+  }
+
+  let cloned = false;
+
+  if (parsed) {
+    const ghTarget = `${parsed.owner}/${parsed.repo}`;
+    const ghCode = await runProcess('gh', ['repo', 'clone', ghTarget, destination], root);
+    if (ghCode === 0) {
+      cloned = true;
+    }
+  }
+
+  if (!cloned) {
+    const gitCode = await runProcess('git', ['clone', source, destination], root);
+    if (gitCode !== 0) {
+      throw new Error(`Failed to clone repository: ${source}`);
+    }
+    cloned = true;
+  }
+
+  return { destination, repoName, cloned };
+}
+
+async function summarizeRepository(repoPath) {
+  const ignoredDirNames = new Set(['.git', 'node_modules', 'dist', 'build', '.next', '.venv', 'venv']);
+  const extensionCounts = new Map();
+  const keyFiles = {
+    package_json: false,
+    pyproject_toml: false,
+    requirements_txt: false,
+    dockerfile: false,
+    docker_compose: false,
+    readme: false
+  };
+
+  let fileCount = 0;
+  let dirCount = 0;
+
+  const stack = [repoPath];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      const relPath = path.relative(repoPath, fullPath);
+
+      if (entry.isDirectory()) {
+        if (ignoredDirNames.has(entry.name)) {
+          continue;
+        }
+        dirCount += 1;
+        stack.push(fullPath);
+        continue;
+      }
+
+      fileCount += 1;
+
+      const lower = entry.name.toLowerCase();
+      if (lower === 'package.json') keyFiles.package_json = true;
+      if (lower === 'pyproject.toml') keyFiles.pyproject_toml = true;
+      if (lower === 'requirements.txt') keyFiles.requirements_txt = true;
+      if (lower === 'dockerfile') keyFiles.dockerfile = true;
+      if (lower === 'docker-compose.yml' || lower === 'docker-compose.yaml') keyFiles.docker_compose = true;
+      if (lower === 'readme.md' || lower === 'readme') keyFiles.readme = true;
+
+      const ext = path.extname(lower) || '[no_ext]';
+      extensionCounts.set(ext, (extensionCounts.get(ext) || 0) + 1);
+
+      if (fileCount >= 50000) {
+        break;
+      }
+
+      if (relPath.length > 0) {
+        // noop, keeps relPath available for future enrichment
+      }
+    }
+
+    if (fileCount >= 50000) {
+      break;
+    }
+  }
+
+  const topExtensions = [...extensionCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([ext, count]) => ({ ext, count }));
+
+  return {
+    repository_name: path.basename(repoPath),
+    repository_path: repoPath,
+    scanned_at: new Date().toISOString(),
+    files: fileCount,
+    directories: dirCount,
+    key_files: keyFiles,
+    top_extensions: topExtensions
+  };
+}
+
+function renderRepositorySummaryMarkdown(summary) {
+  const lines = [];
+  lines.push(`# Repository Context: ${summary.repository_name}`);
+  lines.push('');
+  lines.push(`- path: \`${summary.repository_path}\``);
+  lines.push(`- scanned_at: ${summary.scanned_at}`);
+  lines.push(`- files: ${summary.files}`);
+  lines.push(`- directories: ${summary.directories}`);
+  lines.push('');
+  lines.push('## Key Files');
+  lines.push('');
+  for (const [key, value] of Object.entries(summary.key_files)) {
+    lines.push(`- ${key}: ${value ? 'yes' : 'no'}`);
+  }
+  lines.push('');
+  lines.push('## Top Extensions');
+  lines.push('');
+  for (const item of summary.top_extensions) {
+    lines.push(`- ${item.ext}: ${item.count}`);
+  }
+  if (summary.top_extensions.length === 0) {
+    lines.push('- none');
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function scanRepositoriesAndBuildArtifacts(root) {
+  const repositoriesDir = path.join(root, 'repositories');
+
+  if (!(await pathExists(repositoriesDir))) {
+    return { scannedCount: 0, artifacts: [] };
+  }
+
+  const sourcesRepoDir = path.join(root, 'context-engineering', 'sources', 'repositories');
+  await mkdir(sourcesRepoDir, { recursive: true });
+
+  const entries = await readdir(repositoriesDir, { withFileTypes: true });
+  const repos = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(repositoriesDir, entry.name));
+
+  const artifacts = [];
+  for (const repoPath of repos) {
+    const summary = await summarizeRepository(repoPath);
+    const baseName = summary.repository_name;
+    const jsonPath = path.join(sourcesRepoDir, `${baseName}.json`);
+    const mdPath = path.join(sourcesRepoDir, `${baseName}.md`);
+
+    await writeFile(jsonPath, JSON.stringify(summary, null, 2), 'utf8');
+    await writeFile(mdPath, renderRepositorySummaryMarkdown(summary), 'utf8');
+
+    artifacts.push({
+      repository: summary.repository_name,
+      json: path.relative(root, jsonPath),
+      markdown: path.relative(root, mdPath)
+    });
+  }
+
+  const indexPath = path.join(sourcesRepoDir, 'index.json');
+  await writeFile(
+    indexPath,
+    JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        repositories_scanned: artifacts.length,
+        artifacts
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  return { scannedCount: artifacts.length, artifacts, indexPath: path.relative(root, indexPath) };
+}
+
 async function runScanCommand(targetDir, options) {
   const root = path.resolve(process.cwd(), targetDir);
 
@@ -412,6 +626,13 @@ async function runScanCommand(targetDir, options) {
     source_file_count: sourceFiles
   };
 
+  const repositoryContext = await scanRepositoriesAndBuildArtifacts(root);
+  report.repositories_scanned = repositoryContext.scannedCount;
+  report.repository_artifacts = repositoryContext.artifacts;
+  if (repositoryContext.indexPath) {
+    report.repository_artifact_index = repositoryContext.indexPath;
+  }
+
   if (options.write) {
     const scanDir = path.join(root, 'context-engineering', 'scan');
     await mkdir(scanDir, { recursive: true });
@@ -428,6 +649,10 @@ async function runScanCommand(targetDir, options) {
     console.log(`- Source files: ${report.source_file_count}`);
     for (const [key, value] of Object.entries(checks)) {
       console.log(`- ${key}: ${value ? 'yes' : 'no'}`);
+    }
+    console.log(`- repositories_scanned: ${report.repositories_scanned}`);
+    if (report.repository_artifact_index) {
+      console.log(`- repository_artifact_index: ${report.repository_artifact_index}`);
     }
     if (options.write) {
       console.log('- Report written to: context-engineering/scan/scan-summary.json');
@@ -453,7 +678,9 @@ async function runAddCommand(source, targetDir, options) {
 
   await ensureCatalog(catalogPath);
 
-  const sourceId = options.sourceId || slugifySourceId(source);
+  const cloneResult = await cloneRepositoryIntoWorkspace(source, root);
+  const localRepoRelativePath = path.relative(root, cloneResult.destination);
+  const sourceId = options.sourceId || cloneResult.repoName;
   const domain = options.sourceDomain || 'code';
   const owner = options.sourceOwner || 'engineering';
   const cadence = options.sourceCadence || 'on_change';
@@ -474,13 +701,13 @@ async function runAddCommand(source, targetDir, options) {
     `      cadence: ${cadence}`,
     `      ttl_hours: ${ttl}`,
     '    collector:',
-    '      script: manual',
-    '      mode: manual',
+    '      script: scripts/context/scan_repositories',
+    '      mode: automated',
     '    inputs:',
-    `      - path: ${source}`,
+    `      - path: ${localRepoRelativePath}`,
     '    sensitivity:',
     '      class: safe',
-    `      notes: added by klever add on ${new Date().toISOString().slice(0, 10)}`,
+    `      notes: source_url=${source}`,
     ''
   ].join('\n');
 
@@ -494,10 +721,19 @@ async function runAddCommand(source, targetDir, options) {
 
   await writeFile(catalogPath, next, 'utf8');
 
-  console.log('Source added to catalog');
+  console.log('Repository source prepared');
   console.log(`- Catalog: ${catalogPath}`);
   console.log(`- id: ${sourceId}`);
-  console.log(`- source: ${source}`);
+  console.log(`- source_url: ${source}`);
+  console.log(`- local_path: ${cloneResult.destination}`);
+  if (cloneResult.cloned) {
+    console.log('- clone: completed');
+  } else {
+    console.log('- clone: skipped (already exists)');
+  }
+
+  const repoScan = await scanRepositoriesAndBuildArtifacts(root);
+  console.log(`- repositories_scanned: ${repoScan.scannedCount}`);
 }
 
 async function runScaffoldCommand(command, targetArg, options) {
