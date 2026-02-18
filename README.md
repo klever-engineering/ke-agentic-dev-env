@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](./CHANGELOG.md)
 
 Generic template repository and npm CLI scaffold for agentic development environments.
 
@@ -105,6 +105,6 @@ npm test
 
 ## Release notes
 
-- Current release line: `v0.1.0`
+- Current release line: `v0.2.0`
 - Changelog: `CHANGELOG.md`
 - License: `LICENSE`

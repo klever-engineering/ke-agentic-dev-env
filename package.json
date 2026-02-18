@@ -1,6 +1,6 @@
 {
   "name": "@klever/agentic-environment",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bootstrap or wrap repositories with a generic agentic development environment",
   "type": "module",
   "repository": {
