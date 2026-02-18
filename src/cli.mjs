@@ -8,6 +8,8 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { PROFILES, runScaffold } from './scaffold.mjs';
 
 const MAJOR_PROVIDERS = ['openai', 'anthropic', 'gemini'];
+const MANAGED_AGENTS_START = '<!-- klever:managed:start -->';
+const MANAGED_AGENTS_END = '<!-- klever:managed:end -->';
 
 const FLAG_CONFIG = {
   '--profile': { key: 'profile', type: 'value' },
@@ -532,11 +534,149 @@ function renderRepositorySummaryMarkdown(summary) {
   return lines.join('\n');
 }
 
+function topExtensionsAcrossRepositories(summaries, maxItems = 8) {
+  const counts = new Map();
+
+  for (const summary of summaries) {
+    for (const item of summary.top_extensions || []) {
+      counts.set(item.ext, (counts.get(item.ext) || 0) + item.count);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, maxItems)
+    .map(([ext, count]) => ({ ext, count }));
+}
+
+function renderManagedAgentsSection(root, report, repositoryContext) {
+  const lines = [];
+  const extensionSummary = topExtensionsAcrossRepositories(repositoryContext.summaries || []);
+  lines.push(MANAGED_AGENTS_START);
+  lines.push('## Repository Operations Context (Generated)');
+  lines.push('');
+  lines.push(`- generated_at: ${new Date().toISOString()}`);
+  lines.push(`- scan_target: \`${report.target}\``);
+  lines.push(`- repositories_dir: \`${path.join(root, 'repositories')}\``);
+  lines.push(`- repositories_scanned: ${repositoryContext.scannedCount}`);
+  if (report.repository_artifact_index) {
+    lines.push(`- artifact_index: \`${report.repository_artifact_index}\``);
+  }
+  lines.push('');
+  lines.push('### Working Model');
+  lines.push('');
+  lines.push('- Clone product repositories only with `klever add <git-url>` so catalog and context stay in sync.');
+  lines.push('- Keep each product repository isolated under `repositories/<name>/`.');
+  lines.push('- Run `klever scan --write` after adding repositories or after major structure changes.');
+  lines.push('- Use `context-engineering/sources/repositories/*.md` as the first context layer for coding agents.');
+  lines.push('');
+  lines.push('### Repositories');
+  lines.push('');
+  if ((repositoryContext.summaries || []).length === 0) {
+    lines.push('- none scanned yet');
+  } else {
+    for (const summary of repositoryContext.summaries) {
+      const prominentExt = (summary.top_extensions || []).slice(0, 3).map((item) => item.ext).join(', ') || 'n/a';
+      const keyFiles = Object.entries(summary.key_files || {})
+        .filter(([, enabled]) => enabled)
+        .map(([name]) => name)
+        .join(', ') || 'none';
+      lines.push(
+        `- \`${summary.repository_name}\` at \`${summary.repository_relative_path}\` ` +
+          `(files: ${summary.files}, dirs: ${summary.directories}, top_ext: ${prominentExt}, key_files: ${keyFiles})`
+      );
+    }
+  }
+  lines.push('');
+  lines.push('### Cross-Repository Signals');
+  lines.push('');
+  if (extensionSummary.length === 0) {
+    lines.push('- none');
+  } else {
+    for (const item of extensionSummary) {
+      lines.push(`- ${item.ext}: ${item.count}`);
+    }
+  }
+  lines.push('');
+  lines.push('### Suggested Agent Focus');
+  lines.push('');
+  lines.push('- Build repository-specific plans using each generated repository summary before editing code.');
+  lines.push('- Prioritize integration points across repositories only after validating local contracts in each repo.');
+  lines.push('- Keep context artifacts fresh to reduce hallucinated assumptions.');
+  lines.push(MANAGED_AGENTS_END);
+  lines.push('');
+  return lines.join('\n');
+}
+
+function renderDefaultAgentsHandbook() {
+  const lines = [];
+  lines.push('# Agent Handbook');
+  lines.push('');
+  lines.push('This handbook is maintained by `klever` and defines default operating rules for this workspace.');
+  lines.push('');
+  lines.push('## Startup Checklist');
+  lines.push('');
+  lines.push('1. Read this file and `agent-context.json` before changes.');
+  lines.push('2. Validate scope and rollback strategy before execution.');
+  lines.push('3. Run `./scripts/ci/preflight.sh` before opening a PR.');
+  lines.push('');
+  lines.push('## Context Engineering Policy');
+  lines.push('');
+  lines.push('- Canonical workspace: `context-engineering/`');
+  lines.push('- Raw input: `context-engineering/input/`');
+  lines.push('- Curated sources: `context-engineering/sources/`');
+  lines.push('- Processing notes: `context-engineering/support/`');
+  lines.push('');
+  lines.push('## Security Baseline');
+  lines.push('');
+  lines.push('- Never commit secrets.');
+  lines.push('- Keep `GITHUB_API_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY` in local env only.');
+  lines.push('- Run `scripts/secret-scan.sh` before pushing.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function ensureAgentsHandbook(root, report, repositoryContext) {
+  const agentsPath = path.join(root, 'AGENTS.md');
+  const managedSection = renderManagedAgentsSection(root, report, repositoryContext).trimEnd();
+
+  let existing = '';
+  let created = false;
+  if (await pathExists(agentsPath)) {
+    existing = await readFile(agentsPath, 'utf8');
+  } else {
+    existing = renderDefaultAgentsHandbook();
+    created = true;
+  }
+
+  let next = '';
+  const hasManagedSection = existing.includes(MANAGED_AGENTS_START) && existing.includes(MANAGED_AGENTS_END);
+  if (hasManagedSection) {
+    next = existing.replace(
+      new RegExp(`${MANAGED_AGENTS_START}[\\s\\S]*?${MANAGED_AGENTS_END}`),
+      managedSection
+    );
+  } else {
+    next = `${existing.trimEnd()}\n\n${managedSection}\n`;
+  }
+
+  const updated = next !== existing;
+  if (created || updated) {
+    await writeFile(agentsPath, next, 'utf8');
+  }
+
+  return {
+    path: path.relative(root, agentsPath),
+    created,
+    updated: updated && !created
+  };
+}
+
 async function scanRepositoriesAndBuildArtifacts(root) {
   const repositoriesDir = path.join(root, 'repositories');
 
   if (!(await pathExists(repositoriesDir))) {
-    return { scannedCount: 0, artifacts: [] };
+    return { scannedCount: 0, artifacts: [], summaries: [] };
   }
 
   const sourcesRepoDir = path.join(root, 'context-engineering', 'sources', 'repositories');
@@ -546,20 +686,27 @@ async function scanRepositoriesAndBuildArtifacts(root) {
   const repos = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(repositoriesDir, entry.name));
 
   const artifacts = [];
+  const summaries = [];
   for (const repoPath of repos) {
     const summary = await summarizeRepository(repoPath);
     const baseName = summary.repository_name;
     const jsonPath = path.join(sourcesRepoDir, `${baseName}.json`);
     const mdPath = path.join(sourcesRepoDir, `${baseName}.md`);
+    const relativeRepositoryPath = path.relative(root, repoPath);
+    const summaryWithRelativePath = {
+      ...summary,
+      repository_relative_path: relativeRepositoryPath
+    };
 
-    await writeFile(jsonPath, JSON.stringify(summary, null, 2), 'utf8');
-    await writeFile(mdPath, renderRepositorySummaryMarkdown(summary), 'utf8');
+    await writeFile(jsonPath, JSON.stringify(summaryWithRelativePath, null, 2), 'utf8');
+    await writeFile(mdPath, renderRepositorySummaryMarkdown(summaryWithRelativePath), 'utf8');
 
     artifacts.push({
-      repository: summary.repository_name,
+      repository: summaryWithRelativePath.repository_name,
       json: path.relative(root, jsonPath),
       markdown: path.relative(root, mdPath)
     });
+    summaries.push(summaryWithRelativePath);
   }
 
   const indexPath = path.join(sourcesRepoDir, 'index.json');
@@ -577,7 +724,7 @@ async function scanRepositoriesAndBuildArtifacts(root) {
     'utf8'
   );
 
-  return { scannedCount: artifacts.length, artifacts, indexPath: path.relative(root, indexPath) };
+  return { scannedCount: artifacts.length, artifacts, summaries, indexPath: path.relative(root, indexPath) };
 }
 
 async function runScanCommand(targetDir, options) {
@@ -632,6 +779,12 @@ async function runScanCommand(targetDir, options) {
   if (repositoryContext.indexPath) {
     report.repository_artifact_index = repositoryContext.indexPath;
   }
+  const agentsResult = await ensureAgentsHandbook(root, report, repositoryContext);
+  if (agentsResult.created || agentsResult.updated) {
+    checks.hasAgents = true;
+  }
+  report.agents_handbook = agentsResult.path;
+  report.agents_handbook_updated = agentsResult.created || agentsResult.updated;
 
   if (options.write) {
     const scanDir = path.join(root, 'context-engineering', 'scan');
@@ -654,6 +807,8 @@ async function runScanCommand(targetDir, options) {
     if (report.repository_artifact_index) {
       console.log(`- repository_artifact_index: ${report.repository_artifact_index}`);
     }
+    console.log(`- agents_handbook: ${report.agents_handbook}`);
+    console.log(`- agents_handbook_updated: ${report.agents_handbook_updated ? 'yes' : 'no'}`);
     if (options.write) {
       console.log('- Report written to: context-engineering/scan/scan-summary.json');
     }
@@ -734,6 +889,13 @@ async function runAddCommand(source, targetDir, options) {
 
   const repoScan = await scanRepositoriesAndBuildArtifacts(root);
   console.log(`- repositories_scanned: ${repoScan.scannedCount}`);
+  const addReport = {
+    target: root,
+    repository_artifact_index: repoScan.indexPath
+  };
+  const agentsResult = await ensureAgentsHandbook(root, addReport, repoScan);
+  console.log(`- agents_handbook: ${agentsResult.path}`);
+  console.log(`- agents_handbook_updated: ${agentsResult.created || agentsResult.updated ? 'yes' : 'no'}`);
 }
 
 async function runScaffoldCommand(command, targetArg, options) {
