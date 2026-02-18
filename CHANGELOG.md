@@ -10,8 +10,8 @@ The format is inspired by Keep a Changelog and this project follows Semantic Ver
 
 - New primary CLI binary name: `klever` (while keeping `klever-agentic` compatibility alias).
 - New CLI commands:
-  - `klever scan [target-dir]` for workspace readiness inspection.
-  - `klever add <git-repository-url> [target-dir]` for adding source entries to context catalog.
+  - `klever scan [target-dir]` for workspace readiness inspection plus repository artifact generation.
+  - `klever add <git-repository-url> [target-dir]` for cloning repositories into `/repositories` and registering source entries in context catalog.
 - Initial npm CLI scaffold package `@klever/agentic-environment` with `init` and `wrap` commands.
 - Profile-based module system:
   - `foundation`

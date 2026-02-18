@@ -33,9 +33,13 @@ klever wrap <target-dir> --profile full
 # inspect current workspace readiness
 klever scan .
 
-# register external source repository in context catalog
+# clone and register external source repository
 klever add https://github.com/your-org/your-repo.git
 ```
+
+`klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
+
+`klever scan` scans cloned repositories and generates context artifacts under `context-engineering/sources/repositories/`.
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
 

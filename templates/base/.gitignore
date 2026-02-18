@@ -21,3 +21,6 @@ context-engineering/sources/**/raw/
 
 # Reports
 reports/
+
+# Managed repository clones
+repositories/

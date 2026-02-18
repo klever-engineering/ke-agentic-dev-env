@@ -25,6 +25,12 @@ This workspace provides a repeatable baseline for agentic development:
    - `./scripts/ci/preflight.sh`
 5. Create your first sprint task with `.github/ISSUE_TEMPLATE/agentic-sprint-task.yml`.
 
+## Repository workflow
+
+- Clone managed product repositories using `klever add <repo-url>`.
+- Repositories are stored under `repositories/`.
+- Run `klever scan --write` to generate repository context artifacts under `context-engineering/sources/repositories/`.
+
 ## Profiles
 
 This scaffold supports three setup profiles:
