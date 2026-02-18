@@ -1,0 +1,40 @@
+name: Implementation Task
+description: Feature, improvement, or technical implementation task
+title: "[IMPL]: "
+labels: ["task"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+    validations:
+      required: true
+
+  - type: textarea
+    id: affected_paths
+    attributes:
+      label: Affected Paths/Repositories
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+    validations:
+      required: true
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation Plan
+      description: Commands and checks.
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback Strategy
+    validations:
+      required: true

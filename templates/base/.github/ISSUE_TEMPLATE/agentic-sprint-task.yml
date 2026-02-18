@@ -1,0 +1,60 @@
+name: Agentic Sprint Task
+about: Create a sprint task with clear AI-execution boundaries
+labels: ["next-agentic-ai-improvement"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Include in-scope and out-of-scope boundaries.
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: Deliverables
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+    validations:
+      required: true
+
+  - type: input
+    id: agent_estimate
+    attributes:
+      label: Human + Agent estimate (hours)
+      placeholder: "4"
+    validations:
+      required: true
+
+  - type: input
+    id: human_estimate
+    attributes:
+      label: Human alone estimate (hours)
+      placeholder: "7"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk Level
+      options:
+        - Low
+        - Medium
+        - High
+        - Critical
+    validations:
+      required: true

@@ -1,0 +1,21 @@
+name: Validate Agent Context
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate contract and docs
+        run: |
+          find scripts -type f -name '*.sh' -exec chmod +x {} +
+          ./scripts/validate_agent_context.sh
+          ./scripts/validate_markdown_links.sh
+          ./scripts/context/validate_context.sh

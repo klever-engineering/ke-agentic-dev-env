@@ -1,0 +1,25 @@
+{
+  "name": "__PROJECT_NAME__ agentic devcontainer",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    }
+  },
+  "postCreateCommand": "npm --version && node --version",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-json",
+        "dbaeumer.vscode-eslint",
+        "github.copilot",
+        "github.copilot-chat"
+      ],
+      "settings": {
+        "files.trimTrailingWhitespace": true,
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}

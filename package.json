@@ -1,0 +1,22 @@
+{
+  "name": "@klever/agentic-environment",
+  "version": "0.1.0",
+  "description": "Bootstrap or wrap repositories with a generic agentic development environment",
+  "type": "module",
+  "bin": {
+    "klever-agentic": "src/cli.mjs"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs",
+    "test": "node --test"
+  },
+  "keywords": [
+    "agentic",
+    "developer-experience",
+    "template",
+    "cli",
+    "context-engineering"
+  ],
+  "author": "Klever Engineering",
+  "license": "MIT"
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://klever.engineering/schemas/agent-context.schema.json",
+  "title": "Agent Context Contract",
+  "type": "object",
+  "required": [
+    "version",
+    "workspace",
+    "documentation",
+    "scripts",
+    "validation_commands"
+  ],
+  "properties": {
+    "version": {
+      "type": "string"
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["name", "purpose", "root_path"],
+      "properties": {
+        "name": { "type": "string" },
+        "purpose": { "type": "string" },
+        "root_path": { "type": "string" },
+        "prohibited_paths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "reason"],
+            "properties": {
+              "path": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        },
+        "risk_sensitive_areas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["area", "risk_level", "description", "mitigation"],
+            "properties": {
+              "area": { "type": "string" },
+              "risk_level": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "critical"]
+              },
+              "description": { "type": "string" },
+              "mitigation": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "documentation": {
+      "type": "object"
+    },
+    "scripts": {
+      "type": "object"
+    },
+    "validation_commands": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}
