@@ -925,17 +925,27 @@ async function ensureAgentsHandbook(root, report, repositoryContext) {
 }
 
 async function scanRepositoriesAndBuildArtifacts(root) {
-  const repositoriesDir = path.join(root, 'repositories');
+  const candidateDirs = [path.join(root, 'repository'), path.join(root, 'repositories')];
+  const existingDirs = [];
+  for (const candidate of candidateDirs) {
+    if (await pathExists(candidate)) {
+      existingDirs.push(candidate);
+    }
+  }
 
-  if (!(await pathExists(repositoriesDir))) {
-    return { scannedCount: 0, artifacts: [], summaries: [] };
+  if (existingDirs.length === 0) {
+    return { scannedCount: 0, artifacts: [], summaries: [], scanned_roots: [] };
   }
 
   const sourcesRepoDir = path.join(root, 'context-engineering', 'sources', 'repositories');
   await mkdir(sourcesRepoDir, { recursive: true });
 
-  const entries = await readdir(repositoriesDir, { withFileTypes: true });
-  const repos = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(repositoriesDir, entry.name));
+  const repos = [];
+  for (const sourceRoot of existingDirs) {
+    const entries = await readdir(sourceRoot, { withFileTypes: true });
+    const rootRepos = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(sourceRoot, entry.name));
+    repos.push(...rootRepos);
+  }
 
   const artifacts = [];
   const summaries = [];
@@ -976,7 +986,13 @@ async function scanRepositoriesAndBuildArtifacts(root) {
     'utf8'
   );
 
-  return { scannedCount: artifacts.length, artifacts, summaries, indexPath: path.relative(root, indexPath) };
+  return {
+    scannedCount: artifacts.length,
+    artifacts,
+    summaries,
+    indexPath: path.relative(root, indexPath),
+    scanned_roots: existingDirs.map((dirPath) => path.relative(root, dirPath))
+  };
 }
 
 async function runScanCommand(targetDir, options) {
@@ -1030,6 +1046,7 @@ async function runScanCommand(targetDir, options) {
   const repositoryContext = await scanRepositoriesAndBuildArtifacts(root);
   report.repositories_scanned = repositoryContext.scannedCount;
   report.repository_artifacts = repositoryContext.artifacts;
+  report.repository_scan_roots = repositoryContext.scanned_roots || [];
   if (repositoryContext.indexPath) {
     report.repository_artifact_index = repositoryContext.indexPath;
   }
@@ -1085,6 +1102,9 @@ async function runScanCommand(targetDir, options) {
       console.log(`- ${key}: ${value ? 'yes' : 'no'}`);
     }
     console.log(`- repositories_scanned: ${report.repositories_scanned}`);
+    if ((report.repository_scan_roots || []).length > 0) {
+      console.log(`- repository_scan_roots: ${report.repository_scan_roots.join(', ')}`);
+    }
     if (report.repository_artifact_index) {
       console.log(`- repository_artifact_index: ${report.repository_artifact_index}`);
     }
