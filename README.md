@@ -46,6 +46,12 @@ klever add https://github.com/your-org/your-repo.git
   - `source-map.json`
   - `mcp-suggestions.json`
   - `mcp-suggestions.md`
+  - `<repo>.intelligence.json`
+  - `<repo>.intelligence.md`
+  - `intelligence-index.json`
+- generates cross-repository topology under `context-engineering/sources/`:
+  - `system-map.json`
+  - `system-map.md`
 - writes delegated scan prompt (when local agent mode is selected):
   - `context-engineering/scan/delegated-scan-request.md`
 

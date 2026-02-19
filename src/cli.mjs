@@ -842,7 +842,10 @@ async function generateRepositoryIntelligence(root, provider, repositoryContext)
       generated_at: new Date().toISOString(),
       provider,
       repository: summary.repository_name,
+      source_path: summary.repository_relative_path,
       source_files: docs.map((doc) => doc.path),
+      confidence_score: summary.confidence_score ?? null,
+      assumptions: summary.assumptions || [],
       intelligence
     };
     await writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
@@ -861,6 +864,10 @@ async function generateRepositoryIntelligence(root, provider, repositoryContext)
       {
         generated_at: new Date().toISOString(),
         provider,
+        provenance: {
+          scan_roots: repositoryContext.scanned_roots || [],
+          source: 'llm-api-deep-scan'
+        },
         repositories: items
       },
       null,
@@ -881,23 +888,42 @@ async function generateRepositoryIntelligence(root, provider, repositoryContext)
 async function buildDeepRepositoryArtifacts(root, repositoryContext) {
   const outDir = path.join(root, 'context-engineering', 'sources', 'repositories');
   await mkdir(outDir, { recursive: true });
+  const avgConfidence =
+    (repositoryContext.summaries || []).reduce((acc, item) => acc + (item.confidence_score || 0), 0) /
+    Math.max(1, (repositoryContext.summaries || []).length);
 
   const sourceMap = {
+    artifact: 'source-map',
     generated_at: new Date().toISOString(),
     repositories_scanned: repositoryContext.scannedCount,
+    confidence_score: Number(avgConfidence.toFixed(2)),
+    provenance: {
+      scan_roots: repositoryContext.scanned_roots || [],
+      method: 'filesystem-scan',
+      assumptions: ['Source map is derived from repository file metadata and selected docs, not full semantic parsing.']
+    },
     repositories: (repositoryContext.summaries || []).map((summary) => ({
       repository: summary.repository_name,
       path: summary.repository_relative_path,
       files: summary.files,
       directories: summary.directories,
       key_files: summary.key_files,
-      top_extensions: summary.top_extensions
+      top_extensions: summary.top_extensions,
+      confidence_score: summary.confidence_score ?? null,
+      assumptions: summary.assumptions || []
     }))
   };
 
   const mcpSuggestions = {
+    artifact: 'mcp-suggestions',
     generated_at: new Date().toISOString(),
     repositories_scanned: repositoryContext.scannedCount,
+    confidence_score: Number(Math.max(0.5, avgConfidence - 0.1).toFixed(2)),
+    provenance: {
+      scan_roots: repositoryContext.scanned_roots || [],
+      method: 'rule-based-inference',
+      assumptions: ['MCP suggestions are heuristic and should be validated by maintainers.']
+    },
     repositories: (repositoryContext.summaries || []).map((summary) => ({
       repository: summary.repository_name,
       suggestions: buildMcpSuggestionsForSummary(summary)
@@ -915,6 +941,100 @@ async function buildDeepRepositoryArtifacts(root, repositoryContext) {
     source_map: path.relative(root, sourceMapPath),
     mcp_suggestions_json: path.relative(root, mcpJsonPath),
     mcp_suggestions_markdown: path.relative(root, mcpMdPath)
+  };
+}
+
+function renderSystemMapMarkdown(systemMap) {
+  const lines = ['# System Map', ''];
+  lines.push(`- generated_at: ${systemMap.generated_at}`);
+  lines.push(`- repositories: ${systemMap.repositories.length}`);
+  lines.push(`- confidence_score: ${systemMap.confidence_score}`);
+  lines.push('');
+  lines.push('## Repositories');
+  lines.push('');
+  for (const repo of systemMap.repositories) {
+    lines.push(`- ${repo.repository} (${repo.path})`);
+    lines.push(`  - purpose: ${repo.purpose || 'N/A'}`);
+    lines.push(`  - data_stores: ${(repo.data_stores || []).join(', ') || 'unknown'}`);
+    lines.push(`  - integrations: ${(repo.integrations || []).join(', ') || 'none'}`);
+  }
+  if (systemMap.repositories.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('## Cross-Repo Links');
+  lines.push('');
+  for (const link of systemMap.links || []) {
+    lines.push(`- ${link.from} -> ${link.to}: ${link.reason}`);
+  }
+  if (!systemMap.links || systemMap.links.length === 0) lines.push('- none inferred');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function buildSystemMapArtifacts(root, repositoryContext, repositoryIntelligence) {
+  const outDir = path.join(root, 'context-engineering', 'sources');
+  await mkdir(outDir, { recursive: true });
+
+  const intelligenceByRepo = new Map();
+  for (const item of repositoryIntelligence?.artifacts || []) {
+    const intelligencePath = path.join(root, item.json);
+    const intelligenceRaw = await readFile(intelligencePath, 'utf8').catch(() => '');
+    if (!intelligenceRaw) continue;
+    const parsed = JSON.parse(intelligenceRaw);
+    intelligenceByRepo.set(item.repository, parsed.intelligence || {});
+  }
+
+  const repos = (repositoryContext.summaries || []).map((summary) => {
+    const intelligence = intelligenceByRepo.get(summary.repository_name) || {};
+    return {
+      repository: summary.repository_name,
+      path: summary.repository_relative_path,
+      purpose: intelligence.repository_purpose || '',
+      use_cases: intelligence.primary_use_cases || [],
+      data_stores: intelligence?.data_persistence?.stores || [],
+      integrations: intelligence.integration_points || [],
+      confidence_score: summary.confidence_score ?? null
+    };
+  });
+
+  const links = [];
+  for (let i = 0; i < repos.length; i += 1) {
+    for (let j = i + 1; j < repos.length; j += 1) {
+      const left = repos[i];
+      const right = repos[j];
+      const overlap = (left.integrations || []).filter((item) => (right.integrations || []).includes(item));
+      if (overlap.length > 0) {
+        links.push({
+          from: left.repository,
+          to: right.repository,
+          reason: `shared_integration:${overlap[0]}`
+        });
+      }
+    }
+  }
+
+  const avgConfidence =
+    repos.reduce((acc, item) => acc + (item.confidence_score || 0), 0) / Math.max(1, repos.length);
+  const systemMap = {
+    artifact: 'system-map',
+    generated_at: new Date().toISOString(),
+    confidence_score: Number(Math.max(0.5, avgConfidence).toFixed(2)),
+    provenance: {
+      scan_roots: repositoryContext.scanned_roots || [],
+      intelligence_index: repositoryIntelligence?.index || null,
+      assumptions: ['Cross-repo links are inferred from integration overlap and available intelligence.']
+    },
+    repositories: repos,
+    links
+  };
+
+  const jsonPath = path.join(outDir, 'system-map.json');
+  const mdPath = path.join(outDir, 'system-map.md');
+  await writeFile(jsonPath, JSON.stringify(systemMap, null, 2), 'utf8');
+  await writeFile(mdPath, renderSystemMapMarkdown(systemMap), 'utf8');
+
+  return {
+    json: path.relative(root, jsonPath),
+    markdown: path.relative(root, mdPath)
   };
 }
 
@@ -1046,6 +1166,19 @@ async function summarizeRepository(repoPath) {
     .slice(0, 12)
     .map(([ext, count]) => ({ ext, count }));
 
+  const confidenceSignals = [
+    keyFiles.readme,
+    keyFiles.package_json || keyFiles.pyproject_toml || keyFiles.requirements_txt,
+    keyFiles.dockerfile || keyFiles.docker_compose,
+    fileCount > 50
+  ].filter(Boolean).length;
+  const confidenceScore = Math.min(0.95, 0.45 + confidenceSignals * 0.12);
+  const assumptions = [];
+  if (!keyFiles.readme) assumptions.push('README not found; purpose inference may be less reliable.');
+  if (!(keyFiles.package_json || keyFiles.pyproject_toml || keyFiles.requirements_txt)) {
+    assumptions.push('No standard runtime manifest detected; stack detection is heuristic.');
+  }
+
   return {
     repository_name: path.basename(repoPath),
     repository_path: repoPath,
@@ -1053,7 +1186,9 @@ async function summarizeRepository(repoPath) {
     files: fileCount,
     directories: dirCount,
     key_files: keyFiles,
-    top_extensions: topExtensions
+    top_extensions: topExtensions,
+    confidence_score: Number(confidenceScore.toFixed(2)),
+    assumptions
   };
 }
 
@@ -1065,6 +1200,9 @@ function renderRepositorySummaryMarkdown(summary) {
   lines.push(`- scanned_at: ${summary.scanned_at}`);
   lines.push(`- files: ${summary.files}`);
   lines.push(`- directories: ${summary.directories}`);
+  if (typeof summary.confidence_score === 'number') {
+    lines.push(`- confidence_score: ${summary.confidence_score}`);
+  }
   lines.push('');
   lines.push('## Key Files');
   lines.push('');
@@ -1112,6 +1250,9 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   if (report.repository_artifact_index) {
     lines.push(`- artifact_index: \`${report.repository_artifact_index}\``);
   }
+  if (report.system_map?.json) {
+    lines.push(`- system_map: \`${report.system_map.json}\``);
+  }
   lines.push('');
   lines.push('### Working Model');
   lines.push('');
@@ -1128,9 +1269,17 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   lines.push('4. `context-engineering/sources/repositories/source-map.json` (repository source map).');
   lines.push('5. `context-engineering/sources/repositories/mcp-suggestions.json` (recommended MCP integrations).');
   lines.push('6. `context-engineering/sources/repositories/*.intelligence.md` (LLM repository intelligence and onboarding guidance).');
-  lines.push('7. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
+  lines.push('7. `context-engineering/sources/system-map.json` (cross-repository topology and inferred links).');
+  lines.push('8. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
   lines.push('');
   lines.push('Do not skip this bootstrap sequence. Build feature suggestions only after these sources are loaded.');
+  lines.push('If any required artifact is missing or older than 24h, run `klever scan --scan-executor llm-api --scan-method deep --write` and reload context.');
+  lines.push('');
+  lines.push('### Context Contract');
+  lines.push('');
+  lines.push('- Required artifacts must include provenance metadata, confidence score, and assumptions.');
+  lines.push('- Treat low-confidence areas as hypotheses and call them out before implementation.');
+  lines.push('- Stop and request a context refresh when artifact freshness SLA is violated.');
   lines.push('');
   lines.push('### Repositories');
   lines.push('');
@@ -1368,6 +1517,7 @@ async function runScanCommand(targetDir, options) {
   const deepArtifacts = await buildDeepRepositoryArtifacts(root, repositoryContext);
   report.deep_artifacts = deepArtifacts;
   report.repository_intelligence = null;
+  report.system_map = null;
 
   if (scanExecution.executor === 'llm-api') {
     if (scanExecution.method === 'deep') {
@@ -1393,6 +1543,8 @@ async function runScanCommand(targetDir, options) {
       prompt_path: delegatedPromptPath
     };
   }
+
+  report.system_map = await buildSystemMapArtifacts(root, repositoryContext, report.repository_intelligence);
 
   const agentsResult = await ensureAgentsHandbook(root, report, repositoryContext);
   if (agentsResult.created || agentsResult.updated) {
@@ -1431,6 +1583,9 @@ async function runScanCommand(targetDir, options) {
     console.log(`- mcp_suggestions: ${report.deep_artifacts.mcp_suggestions_json}`);
     if (report.repository_intelligence?.index) {
       console.log(`- repository_intelligence_index: ${report.repository_intelligence.index}`);
+    }
+    if (report.system_map?.json) {
+      console.log(`- system_map: ${report.system_map.json}`);
     }
     if (report.scan_execution_result?.prompt_path) {
       console.log(`- delegated_prompt: ${report.scan_execution_result.prompt_path}`);
