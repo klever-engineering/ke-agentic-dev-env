@@ -581,6 +581,303 @@ function renderMcpSuggestionsMarkdown(data) {
   return lines.join('\n');
 }
 
+function repoIntelligencePrompt(documents, summary) {
+  return [
+    'Analyze this software repository for onboarding and coding-agent context.',
+    'Return strict JSON only with this exact shape:',
+    '{',
+    '  "repository_purpose": string,',
+    '  "primary_use_cases": [string],',
+    '  "architecture_overview": string,',
+    '  "data_persistence": {"stores":[string], "notes": string},',
+    '  "integration_points": [string],',
+    '  "adr_signals": [string],',
+    '  "developer_onboarding": {"first_steps":[string], "key_commands":[string]},',
+    '  "feature_delivery_guidance": [string],',
+    '  "open_questions": [string]',
+    '}',
+    'Repository summary:',
+    JSON.stringify(summary, null, 2),
+    'Repository files/snippets:',
+    JSON.stringify(documents, null, 2)
+  ].join('\n');
+}
+
+async function readFileIfExists(filePath, maxChars = 3000) {
+  const exists = await pathExists(filePath);
+  if (!exists) {
+    return '';
+  }
+  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  return raw.slice(0, maxChars);
+}
+
+async function gatherRepositoryDocuments(repoPath, summary) {
+  const documents = [];
+  const includeFile = async (relativePath, maxChars = 3000) => {
+    const absolute = path.join(repoPath, relativePath);
+    const content = await readFileIfExists(absolute, maxChars);
+    if (content.trim()) {
+      documents.push({ path: relativePath, content });
+    }
+  };
+
+  await includeFile('README.md', 5000);
+  await includeFile('README', 5000);
+  await includeFile('package.json', 3000);
+  await includeFile('pyproject.toml', 3000);
+  await includeFile('requirements.txt', 3000);
+  await includeFile('docker-compose.yml', 3000);
+  await includeFile('docker-compose.yaml', 3000);
+  await includeFile('Dockerfile', 3000);
+
+  const docsDir = path.join(repoPath, 'docs');
+  if (await pathExists(docsDir)) {
+    const docsEntries = await readdir(docsDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of docsEntries.slice(0, 8)) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.toLowerCase().endsWith('.md')) continue;
+      await includeFile(path.join('docs', entry.name), 3500);
+    }
+  }
+
+  const adrDirs = ['docs/adr', 'doc/adr', 'adr'];
+  for (const adrDir of adrDirs) {
+    const absoluteAdrDir = path.join(repoPath, adrDir);
+    if (!(await pathExists(absoluteAdrDir))) continue;
+    const adrEntries = await readdir(absoluteAdrDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of adrEntries.slice(0, 8)) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.toLowerCase().endsWith('.md')) continue;
+      await includeFile(path.join(adrDir, entry.name), 3500);
+    }
+  }
+
+  if (documents.length === 0) {
+    documents.push({
+      path: '[summary-only]',
+      content: `No readable primary docs found. Top extensions: ${JSON.stringify(summary.top_extensions || [])}`
+    });
+  }
+
+  return documents.slice(0, 20);
+}
+
+function stripCodeFence(text) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed.startsWith('```')) return trimmed;
+  return trimmed.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
+}
+
+async function callOpenAIJson(prompt, token, model = 'gpt-4o-mini') {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: 'You produce structured software repository analysis in JSON.' },
+        { role: 'user', content: prompt }
+      ]
+    })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
+  }
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
+async function callAnthropicJson(prompt, token, model = 'claude-3-5-sonnet-latest') {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': token,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2500,
+      temperature: 0.1,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Anthropic request failed: ${response.status} ${errorText}`);
+  }
+  const data = await response.json();
+  return (data.content || []).map((block) => block.text || '').join('\n');
+}
+
+async function callGeminiJson(prompt, token, model = 'gemini-1.5-pro') {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${token}`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      generationConfig: { temperature: 0.1 },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }]
+    })
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini request failed: ${response.status} ${errorText}`);
+  }
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+function normalizeRepoIntelligence(parsed) {
+  return {
+    repository_purpose: parsed.repository_purpose || '',
+    primary_use_cases: Array.isArray(parsed.primary_use_cases) ? parsed.primary_use_cases : [],
+    architecture_overview: parsed.architecture_overview || '',
+    data_persistence: {
+      stores: Array.isArray(parsed?.data_persistence?.stores) ? parsed.data_persistence.stores : [],
+      notes: parsed?.data_persistence?.notes || ''
+    },
+    integration_points: Array.isArray(parsed.integration_points) ? parsed.integration_points : [],
+    adr_signals: Array.isArray(parsed.adr_signals) ? parsed.adr_signals : [],
+    developer_onboarding: {
+      first_steps: Array.isArray(parsed?.developer_onboarding?.first_steps) ? parsed.developer_onboarding.first_steps : [],
+      key_commands: Array.isArray(parsed?.developer_onboarding?.key_commands) ? parsed.developer_onboarding.key_commands : []
+    },
+    feature_delivery_guidance: Array.isArray(parsed.feature_delivery_guidance) ? parsed.feature_delivery_guidance : [],
+    open_questions: Array.isArray(parsed.open_questions) ? parsed.open_questions : []
+  };
+}
+
+function renderRepoIntelligenceMarkdown(repoName, intelligence) {
+  const lines = [];
+  lines.push(`# Repository Intelligence: ${repoName}`);
+  lines.push('');
+  lines.push('## Purpose');
+  lines.push('');
+  lines.push(intelligence.repository_purpose || 'N/A');
+  lines.push('');
+  lines.push('## Primary Use Cases');
+  lines.push('');
+  for (const item of intelligence.primary_use_cases) lines.push(`- ${item}`);
+  if (intelligence.primary_use_cases.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('## Architecture Overview');
+  lines.push('');
+  lines.push(intelligence.architecture_overview || 'N/A');
+  lines.push('');
+  lines.push('## Data Persistence');
+  lines.push('');
+  for (const store of intelligence.data_persistence.stores) lines.push(`- store: ${store}`);
+  if (intelligence.data_persistence.stores.length === 0) lines.push('- store: unknown');
+  lines.push(`- notes: ${intelligence.data_persistence.notes || 'N/A'}`);
+  lines.push('');
+  lines.push('## Integration Points');
+  lines.push('');
+  for (const item of intelligence.integration_points) lines.push(`- ${item}`);
+  if (intelligence.integration_points.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('## ADR Signals');
+  lines.push('');
+  for (const item of intelligence.adr_signals) lines.push(`- ${item}`);
+  if (intelligence.adr_signals.length === 0) lines.push('- none detected');
+  lines.push('');
+  lines.push('## Developer Onboarding');
+  lines.push('');
+  for (const step of intelligence.developer_onboarding.first_steps) lines.push(`- first_step: ${step}`);
+  if (intelligence.developer_onboarding.first_steps.length === 0) lines.push('- first_step: none');
+  for (const cmd of intelligence.developer_onboarding.key_commands) lines.push(`- command: \`${cmd}\``);
+  if (intelligence.developer_onboarding.key_commands.length === 0) lines.push('- command: none');
+  lines.push('');
+  lines.push('## Feature Delivery Guidance');
+  lines.push('');
+  for (const item of intelligence.feature_delivery_guidance) lines.push(`- ${item}`);
+  if (intelligence.feature_delivery_guidance.length === 0) lines.push('- none');
+  lines.push('');
+  lines.push('## Open Questions');
+  lines.push('');
+  for (const item of intelligence.open_questions) lines.push(`- ${item}`);
+  if (intelligence.open_questions.length === 0) lines.push('- none');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function generateRepositoryIntelligence(root, provider, repositoryContext) {
+  const token = getProviderToken(provider);
+  if (!token) {
+    return { status: 'skipped', reason: `missing_token_for_${provider}` };
+  }
+
+  const outDir = path.join(root, 'context-engineering', 'sources', 'repositories');
+  await mkdir(outDir, { recursive: true });
+
+  const items = [];
+  for (const summary of repositoryContext.summaries || []) {
+    const repoPath = path.join(root, summary.repository_relative_path || path.join('repositories', summary.repository_name));
+    const docs = await gatherRepositoryDocuments(repoPath, summary);
+    const prompt = repoIntelligencePrompt(docs, summary);
+    let raw = '';
+    if (provider === 'openai') raw = await callOpenAIJson(prompt, token);
+    else if (provider === 'anthropic') raw = await callAnthropicJson(prompt, token);
+    else raw = await callGeminiJson(prompt, token);
+
+    const cleaned = stripCodeFence(raw);
+    let parsed = {};
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      parsed = { repository_purpose: cleaned };
+    }
+    const intelligence = normalizeRepoIntelligence(parsed);
+
+    const jsonPath = path.join(outDir, `${summary.repository_name}.intelligence.json`);
+    const mdPath = path.join(outDir, `${summary.repository_name}.intelligence.md`);
+    const metadata = {
+      generated_at: new Date().toISOString(),
+      provider,
+      repository: summary.repository_name,
+      source_files: docs.map((doc) => doc.path),
+      intelligence
+    };
+    await writeFile(jsonPath, JSON.stringify(metadata, null, 2), 'utf8');
+    await writeFile(mdPath, renderRepoIntelligenceMarkdown(summary.repository_name, intelligence), 'utf8');
+    items.push({
+      repository: summary.repository_name,
+      json: path.relative(root, jsonPath),
+      markdown: path.relative(root, mdPath)
+    });
+  }
+
+  const indexPath = path.join(outDir, 'intelligence-index.json');
+  await writeFile(
+    indexPath,
+    JSON.stringify(
+      {
+        generated_at: new Date().toISOString(),
+        provider,
+        repositories: items
+      },
+      null,
+      2
+    ),
+    'utf8'
+  );
+
+  return {
+    status: 'completed',
+    provider,
+    repository_count: items.length,
+    index: path.relative(root, indexPath),
+    artifacts: items
+  };
+}
+
 async function buildDeepRepositoryArtifacts(root, repositoryContext) {
   const outDir = path.join(root, 'context-engineering', 'sources', 'repositories');
   await mkdir(outDir, { recursive: true });
@@ -679,7 +976,8 @@ async function runLlmBestEffortScan(root, options, report) {
     mode: 'llm-api',
     provider: llmSetup.provider,
     status: code === 0 ? 'completed' : 'failed',
-    exit_code: code
+    exit_code: code,
+    repository_intelligence: report.repository_intelligence || null
   };
 }
 
@@ -829,7 +1127,8 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   lines.push('3. `context-engineering/scan/scan-summary.json` (latest scan result and execution mode).');
   lines.push('4. `context-engineering/sources/repositories/source-map.json` (repository source map).');
   lines.push('5. `context-engineering/sources/repositories/mcp-suggestions.json` (recommended MCP integrations).');
-  lines.push('6. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
+  lines.push('6. `context-engineering/sources/repositories/*.intelligence.md` (LLM repository intelligence and onboarding guidance).');
+  lines.push('7. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
   lines.push('');
   lines.push('Do not skip this bootstrap sequence. Build feature suggestions only after these sources are loaded.');
   lines.push('');
@@ -1068,9 +1367,16 @@ async function runScanCommand(targetDir, options) {
   };
   const deepArtifacts = await buildDeepRepositoryArtifacts(root, repositoryContext);
   report.deep_artifacts = deepArtifacts;
+  report.repository_intelligence = null;
 
   if (scanExecution.executor === 'llm-api') {
-    report.scan_execution_result = await runLlmBestEffortScan(root, options, report);
+    if (scanExecution.method === 'deep') {
+      const llmSetup = await collectLlmSetup(options);
+      report.repository_intelligence = await generateRepositoryIntelligence(root, llmSetup.provider, repositoryContext);
+      report.scan_execution_result = await runLlmBestEffortScan(root, { ...options, llmProvider: llmSetup.provider }, report);
+    } else {
+      report.scan_execution_result = await runLlmBestEffortScan(root, options, report);
+    }
   } else {
     const delegatedPromptPath = await prepareDelegatedScan(
       root,
@@ -1123,6 +1429,9 @@ async function runScanCommand(targetDir, options) {
     console.log(`- scan_method: ${report.scan_execution.method}`);
     console.log(`- deep_source_map: ${report.deep_artifacts.source_map}`);
     console.log(`- mcp_suggestions: ${report.deep_artifacts.mcp_suggestions_json}`);
+    if (report.repository_intelligence?.index) {
+      console.log(`- repository_intelligence_index: ${report.repository_intelligence.index}`);
+    }
     if (report.scan_execution_result?.prompt_path) {
       console.log(`- delegated_prompt: ${report.scan_execution_result.prompt_path}`);
     }
