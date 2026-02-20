@@ -1655,7 +1655,8 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   lines.push('6. `context-engineering/sources/repositories/*.intelligence.md` (LLM repository intelligence and onboarding guidance).');
   lines.push('7. `context-engineering/sources/system-map.json` (cross-repository topology and inferred links).');
   lines.push('8. `context-engineering/sources/addon-suggestions.json` (recommended second-row context addons).');
-  lines.push('9. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
+  lines.push('9. `context-engineering/sources/odoo-business-model/expert-summary.json` (when Odoo addon is installed).');
+  lines.push('10. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
   lines.push('');
   lines.push('Do not skip this bootstrap sequence. Build feature suggestions only after these sources are loaded.');
   lines.push('If any required artifact is missing or older than 24h, run `klever scan --scan-executor llm-api --scan-method deep --write` and reload context.');
