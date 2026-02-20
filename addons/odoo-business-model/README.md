@@ -1,13 +1,17 @@
 # @klever/addon-odoo-business-model
 
-Generates Odoo-specific context artifacts for agentic development workspaces.
+Generates Odoo-specific expert context artifacts for agentic development workspaces.
 
 ## Output
 
 By default, writes to:
 
-- `context-engineering/sources/odoo-business-model/module-map.json`
-- `context-engineering/sources/odoo-business-model/module-map.md`
+- `context-engineering/sources/odoo-business-model/module-map.{json,md}`
+- `context-engineering/sources/odoo-business-model/orm-model-map.{json,md}`
+- `context-engineering/sources/odoo-business-model/security-map.{json,md}`
+- `context-engineering/sources/odoo-business-model/ui-map.{json,md}`
+- `context-engineering/sources/odoo-business-model/route-map.{json,md}`
+- `context-engineering/sources/odoo-business-model/expert-summary.{json,md}`
 
 ## Usage
 
