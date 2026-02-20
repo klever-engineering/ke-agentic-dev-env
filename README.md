@@ -38,6 +38,12 @@ klever add https://github.com/your-org/your-repo.git
 
 # optional: full history clone
 klever add https://github.com/your-org/your-repo.git --full-history
+
+# list suggested addons for current workspace
+klever addons list .
+
+# install addon package into internal toolkit
+klever addons install klever-addon-odoo-business-model .
 ```
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
@@ -60,6 +66,8 @@ klever add https://github.com/your-org/your-repo.git --full-history
   - `addon-suggestions.md`
 - writes delegated scan prompt (when local agent mode is selected):
   - `context-engineering/scan/delegated-scan-request.md`
+
+`klever addons install` installs npm addon packages into `.klever/toolkit/` inside the workspace and tracks them in `.klever/toolkit/addons.json`.
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
 

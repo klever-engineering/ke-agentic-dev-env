@@ -10,6 +10,13 @@ import { PROFILES, runScaffold } from './scaffold.mjs';
 const MAJOR_PROVIDERS = ['openai', 'anthropic', 'gemini'];
 const MANAGED_AGENTS_START = '<!-- klever:managed:start -->';
 const MANAGED_AGENTS_END = '<!-- klever:managed:end -->';
+const ADDON_PACKAGE_MAP = {
+  'klever-addon-postgres-context': '@klever/addon-postgres-context',
+  'klever-addon-odoo-business-model': '@klever/addon-odoo-business-model',
+  'klever-addon-analytics-context': '@klever/addon-analytics-context',
+  'klever-addon-runtime-observability': '@klever/addon-runtime-observability',
+  'klever-addon-architecture-adr-index': '@klever/addon-architecture-adr-index'
+};
 
 const FLAG_CONFIG = {
   '--profile': { key: 'profile', type: 'value' },
@@ -31,7 +38,8 @@ const FLAG_CONFIG = {
   '--catalog': { key: 'catalogPath', type: 'value' },
   '--scan-executor': { key: 'scanExecutor', type: 'value' },
   '--scan-method': { key: 'scanMethod', type: 'value' },
-  '--full-history': { key: 'fullHistory', type: 'boolean' }
+  '--full-history': { key: 'fullHistory', type: 'boolean' },
+  '--package': { key: 'addonPackage', type: 'value' }
 };
 
 function defaultOptions() {
@@ -55,7 +63,8 @@ function defaultOptions() {
     catalogPath: '',
     scanExecutor: 'auto',
     scanMethod: 'deep',
-    fullHistory: false
+    fullHistory: false,
+    addonPackage: ''
   };
 }
 
@@ -69,12 +78,15 @@ Usage:
   klever wrap [target-dir] [options]
   klever scan [target-dir] [options]
   klever add <git-repository-url> [target-dir] [options]
+  klever addons list [target-dir]
+  klever addons install <addon-id|npm-package> [target-dir] [options]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
   wrap    Add agentic scaffold files to an existing repository.
   scan    Inspect workspace readiness and build repository context artifacts.
   add     Clone a repository into /repositories and register it in context catalog.
+  addons  List or install addon packages into workspace internal toolkit.
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
@@ -101,6 +113,9 @@ Add options:
   --ttl <hours>            TTL in hours (default: 720).
   --catalog <path>         Custom catalog path.
   --full-history           Clone complete git history (default is shallow clone).
+
+Addons install options:
+  --package <name>         Force npm package name for addon installation.
 
 General:
   -h, --help               Show this help.
@@ -146,6 +161,16 @@ function parseArgs(argv) {
   }
 
   return result;
+}
+
+async function readJsonFileSafe(filePath) {
+  const raw = await readFile(filePath, 'utf8').catch(() => '');
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeProvider(input) {
@@ -1006,6 +1031,7 @@ function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepA
   if (hasPython || hasOdoo) {
     suggestions.push({
       addon_id: 'klever-addon-postgres-context',
+      npm_package: ADDON_PACKAGE_MAP['klever-addon-postgres-context'],
       confidence: 0.86,
       reason: 'Python/Odoo style workloads often rely on PostgreSQL schemas and query-level debugging context.',
       expected_outcomes: [
@@ -1020,6 +1046,7 @@ function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepA
   if (hasOdoo) {
     suggestions.push({
       addon_id: 'klever-addon-odoo-business-model',
+      npm_package: ADDON_PACKAGE_MAP['klever-addon-odoo-business-model'],
       confidence: 0.91,
       reason: 'Odoo repositories benefit from business entity modeling, module dependency maps, and XML/view intelligence.',
       expected_outcomes: [
@@ -1034,6 +1061,7 @@ function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepA
   if (hasFrontend) {
     suggestions.push({
       addon_id: 'klever-addon-analytics-context',
+      npm_package: ADDON_PACKAGE_MAP['klever-addon-analytics-context'],
       confidence: 0.62,
       reason: 'Frontend/web artifacts detected. Analytics and tracking integration context can improve feature impact analysis.',
       expected_outcomes: [
@@ -1048,6 +1076,7 @@ function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepA
   if (hasDocker) {
     suggestions.push({
       addon_id: 'klever-addon-runtime-observability',
+      npm_package: ADDON_PACKAGE_MAP['klever-addon-runtime-observability'],
       confidence: 0.69,
       reason: 'Container/runtime artifacts detected. Observability addon improves deployment and runtime debugging context.',
       expected_outcomes: [
@@ -1061,6 +1090,7 @@ function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepA
 
   suggestions.push({
     addon_id: 'klever-addon-architecture-adr-index',
+    npm_package: ADDON_PACKAGE_MAP['klever-addon-architecture-adr-index'],
     confidence: 0.74,
     reason: 'Architecture decision indexing improves reliability for multi-repo feature planning.',
     expected_outcomes: ['Normalized ADR timeline', 'Superseded decision map', 'Decision-aware implementation guidance'],
@@ -1087,6 +1117,9 @@ function renderAddonSuggestionsMarkdown(payload) {
   for (const suggestion of payload.suggestions || []) {
     lines.push(`- ${suggestion.addon_id} (confidence: ${suggestion.confidence})`);
     lines.push(`  - reason: ${suggestion.reason}`);
+    if (suggestion.npm_package) {
+      lines.push(`  - npm_package: \`${suggestion.npm_package}\``);
+    }
     lines.push(`  - install: \`${suggestion.install_hint}\``);
     for (const outcome of suggestion.expected_outcomes || []) {
       lines.push(`  - outcome: ${outcome}`);
@@ -1112,6 +1145,128 @@ async function buildAddonSuggestionsArtifacts(root, repositoryContext, repositor
     markdown: path.relative(root, mdPath),
     count: (payload.suggestions || []).length
   };
+}
+
+function addonToolkitPaths(root) {
+  const toolkitRoot = path.join(root, '.klever', 'toolkit');
+  return {
+    toolkitRoot,
+    packageJsonPath: path.join(toolkitRoot, 'package.json'),
+    registryPath: path.join(toolkitRoot, 'addons.json')
+  };
+}
+
+async function ensureAddonToolkit(root) {
+  const paths = addonToolkitPaths(root);
+  await mkdir(paths.toolkitRoot, { recursive: true });
+  if (!(await pathExists(paths.packageJsonPath))) {
+    await writeFile(
+      paths.packageJsonPath,
+      JSON.stringify(
+        {
+          name: 'klever-toolkit',
+          private: true,
+          version: '0.0.0',
+          description: 'Internal toolkit managed by klever addons',
+          dependencies: {}
+        },
+        null,
+        2
+      ),
+      'utf8'
+    );
+  }
+  if (!(await pathExists(paths.registryPath))) {
+    await writeFile(
+      paths.registryPath,
+      JSON.stringify({ installed_at: new Date().toISOString(), addons: [] }, null, 2),
+      'utf8'
+    );
+  }
+  return paths;
+}
+
+async function resolveAddonFromSuggestions(root, addonIdOrPackage) {
+  const suggestionsPath = path.join(root, 'context-engineering', 'sources', 'addon-suggestions.json');
+  const suggestions = await readJsonFileSafe(suggestionsPath);
+  const suggestion =
+    suggestions?.suggestions?.find((item) => item.addon_id === addonIdOrPackage || item.npm_package === addonIdOrPackage) ||
+    null;
+  if (!suggestion) {
+    return {
+      addonId: addonIdOrPackage,
+      packageName: ADDON_PACKAGE_MAP[addonIdOrPackage] || addonIdOrPackage,
+      fromSuggestions: false
+    };
+  }
+  return {
+    addonId: suggestion.addon_id,
+    packageName: suggestion.npm_package || ADDON_PACKAGE_MAP[suggestion.addon_id] || addonIdOrPackage,
+    fromSuggestions: true
+  };
+}
+
+async function runAddonsCommand(parsed) {
+  const action = parsed.positional[1];
+  if (!action || !['list', 'install'].includes(action)) {
+    throw new Error('Usage: klever addons <list|install> [addon-id|npm-package] [target-dir] [options]');
+  }
+
+  if (action === 'list') {
+    const targetArg = parsed.positional[2] || '.';
+    const root = path.resolve(process.cwd(), targetArg);
+    const suggestionsPath = path.join(root, 'context-engineering', 'sources', 'addon-suggestions.json');
+    const registryPath = addonToolkitPaths(root).registryPath;
+    const suggestions = await readJsonFileSafe(suggestionsPath);
+    const installed = await readJsonFileSafe(registryPath);
+    console.log('Addon Status');
+    console.log(`- workspace: ${root}`);
+    console.log(`- suggestions_file: ${path.relative(root, suggestionsPath)}`);
+    console.log(`- installed_registry: ${path.relative(root, registryPath)}`);
+    const suggested = suggestions?.suggestions || [];
+    const installedSet = new Set((installed?.addons || []).map((item) => item.addon_id));
+    console.log(`- suggested_count: ${suggested.length}`);
+    for (const item of suggested) {
+      console.log(
+        `- ${item.addon_id} | npm=${item.npm_package || ADDON_PACKAGE_MAP[item.addon_id] || 'n/a'} | installed=${
+          installedSet.has(item.addon_id) ? 'yes' : 'no'
+        }`
+      );
+    }
+    if (suggested.length === 0) console.log('- none');
+    return;
+  }
+
+  const addonInput = parsed.positional[2];
+  if (!addonInput) {
+    throw new Error('Usage: klever addons install <addon-id|npm-package> [target-dir] [options]');
+  }
+  const targetArg = parsed.positional[3] || '.';
+  const root = path.resolve(process.cwd(), targetArg);
+  const paths = await ensureAddonToolkit(root);
+  const resolved = await resolveAddonFromSuggestions(root, addonInput);
+  const packageName = parsed.options.addonPackage || resolved.packageName;
+  const installCode = await runProcess('npm', ['install', '--prefix', paths.toolkitRoot, packageName], root);
+  if (installCode !== 0) {
+    throw new Error(`Failed to install addon package: ${packageName}`);
+  }
+
+  const registry = (await readJsonFileSafe(paths.registryPath)) || { installed_at: new Date().toISOString(), addons: [] };
+  const nextAddons = (registry.addons || []).filter((item) => item.addon_id !== resolved.addonId);
+  nextAddons.push({
+    addon_id: resolved.addonId,
+    npm_package: packageName,
+    installed_at: new Date().toISOString(),
+    source: resolved.fromSuggestions ? 'suggested' : 'manual'
+  });
+  await writeFile(paths.registryPath, JSON.stringify({ ...registry, addons: nextAddons }, null, 2), 'utf8');
+
+  console.log('Addon installed');
+  console.log(`- workspace: ${root}`);
+  console.log(`- addon_id: ${resolved.addonId}`);
+  console.log(`- npm_package: ${packageName}`);
+  console.log(`- toolkit_root: ${paths.toolkitRoot}`);
+  console.log(`- registry: ${path.relative(root, paths.registryPath)}`);
 }
 
 async function buildSystemMapArtifacts(root, repositoryContext, repositoryIntelligence) {
@@ -1928,6 +2083,11 @@ async function main() {
       }
       const targetArg = parsed.positional[2] || '.';
       await runAddCommand(source, targetArg, parsed.options);
+      return;
+    }
+
+    if (command === 'addons') {
+      await runAddonsCommand(parsed);
       return;
     }
 
