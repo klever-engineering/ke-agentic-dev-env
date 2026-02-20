@@ -35,6 +35,9 @@ klever scan . --scan-executor auto --scan-method deep
 
 # clone and register external source repository
 klever add https://github.com/your-org/your-repo.git
+
+# optional: full history clone
+klever add https://github.com/your-org/your-repo.git --full-history
 ```
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
@@ -52,6 +55,9 @@ klever add https://github.com/your-org/your-repo.git
 - generates cross-repository topology under `context-engineering/sources/`:
   - `system-map.json`
   - `system-map.md`
+- generates addon recommendations for second-row context engineering:
+  - `addon-suggestions.json`
+  - `addon-suggestions.md`
 - writes delegated scan prompt (when local agent mode is selected):
   - `context-engineering/scan/delegated-scan-request.md`
 
