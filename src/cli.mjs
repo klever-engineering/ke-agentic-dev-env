@@ -30,7 +30,8 @@ const FLAG_CONFIG = {
   '--ttl': { key: 'sourceTtl', type: 'value' },
   '--catalog': { key: 'catalogPath', type: 'value' },
   '--scan-executor': { key: 'scanExecutor', type: 'value' },
-  '--scan-method': { key: 'scanMethod', type: 'value' }
+  '--scan-method': { key: 'scanMethod', type: 'value' },
+  '--full-history': { key: 'fullHistory', type: 'boolean' }
 };
 
 function defaultOptions() {
@@ -53,7 +54,8 @@ function defaultOptions() {
     sourceTtl: '720',
     catalogPath: '',
     scanExecutor: 'auto',
-    scanMethod: 'deep'
+    scanMethod: 'deep',
+    fullHistory: false
   };
 }
 
@@ -98,6 +100,7 @@ Add options:
   --cadence <value>        Refresh cadence (default: on_change).
   --ttl <hours>            TTL in hours (default: 720).
   --catalog <path>         Custom catalog path.
+  --full-history           Clone complete git history (default is shallow clone).
 
 General:
   -h, --help               Show this help.
@@ -421,7 +424,7 @@ async function commandExists(command, root) {
   return code === 0;
 }
 
-async function cloneRepositoryIntoWorkspace(source, root) {
+async function cloneRepositoryIntoWorkspace(source, root, options = {}) {
   const repositoriesDir = path.join(root, 'repositories');
   await mkdir(repositoriesDir, { recursive: true });
 
@@ -436,16 +439,23 @@ async function cloneRepositoryIntoWorkspace(source, root) {
 
   let cloned = false;
 
+  const shallowArgs = options.fullHistory ? [] : ['--depth', '1', '--single-branch'];
+
   if (parsed) {
     const ghTarget = `${parsed.owner}/${parsed.repo}`;
-    const ghCode = await runProcess('gh', ['repo', 'clone', ghTarget, destination], root);
+    const ghArgs = ['repo', 'clone', ghTarget, destination];
+    if (shallowArgs.length > 0) {
+      ghArgs.push('--', ...shallowArgs);
+    }
+    const ghCode = await runProcess('gh', ghArgs, root);
     if (ghCode === 0) {
       cloned = true;
     }
   }
 
   if (!cloned) {
-    const gitCode = await runProcess('git', ['clone', source, destination], root);
+    const gitArgs = ['clone', ...shallowArgs, source, destination];
+    const gitCode = await runProcess('git', gitArgs, root);
     if (gitCode !== 0) {
       throw new Error(`Failed to clone repository: ${source}`);
     }
@@ -970,6 +980,140 @@ function renderSystemMapMarkdown(systemMap) {
   return lines.join('\n');
 }
 
+function detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepArtifacts) {
+  const suggestions = [];
+  const summaries = repositoryContext.summaries || [];
+  const repoIntelligenceByName = new Map();
+  for (const item of repositoryIntelligence?.artifacts || []) {
+    repoIntelligenceByName.set(item.repository, item);
+  }
+
+  const hasPython = summaries.some((summary) => {
+    const ext = new Set((summary.top_extensions || []).map((item) => item.ext));
+    return summary.key_files.pyproject_toml || summary.key_files.requirements_txt || ext.has('.py');
+  });
+  const hasOdoo = summaries.some((summary) => {
+    const repoName = String(summary.repository_name || '').toLowerCase();
+    const pathHint = String(summary.repository_relative_path || '').toLowerCase();
+    return repoName.includes('odoo') || pathHint.includes('odoo');
+  });
+  const hasFrontend = summaries.some((summary) => {
+    const ext = new Set((summary.top_extensions || []).map((item) => item.ext));
+    return ext.has('.tsx') || ext.has('.jsx') || ext.has('.js') || ext.has('.css') || ext.has('.html');
+  });
+  const hasDocker = summaries.some((summary) => summary.key_files.dockerfile || summary.key_files.docker_compose);
+
+  if (hasPython || hasOdoo) {
+    suggestions.push({
+      addon_id: 'klever-addon-postgres-context',
+      confidence: 0.86,
+      reason: 'Python/Odoo style workloads often rely on PostgreSQL schemas and query-level debugging context.',
+      expected_outcomes: [
+        'Database model map and migration inventory',
+        'Query troubleshooting context',
+        'Persistence flow traces for agents'
+      ],
+      install_hint: 'klever addons install postgres-context'
+    });
+  }
+
+  if (hasOdoo) {
+    suggestions.push({
+      addon_id: 'klever-addon-odoo-business-model',
+      confidence: 0.91,
+      reason: 'Odoo repositories benefit from business entity modeling, module dependency maps, and XML/view intelligence.',
+      expected_outcomes: [
+        'Module dependency and extension map',
+        'Business process model extracted from addons',
+        'ORM model and view/action relation context'
+      ],
+      install_hint: 'klever addons install odoo-business-model'
+    });
+  }
+
+  if (hasFrontend) {
+    suggestions.push({
+      addon_id: 'klever-addon-analytics-context',
+      confidence: 0.62,
+      reason: 'Frontend/web artifacts detected. Analytics and tracking integration context can improve feature impact analysis.',
+      expected_outcomes: [
+        'Tracking/analytics integration inventory',
+        'Event naming and taxonomy references',
+        'Guidance for safe instrumentation changes'
+      ],
+      install_hint: 'klever addons install analytics-context'
+    });
+  }
+
+  if (hasDocker) {
+    suggestions.push({
+      addon_id: 'klever-addon-runtime-observability',
+      confidence: 0.69,
+      reason: 'Container/runtime artifacts detected. Observability addon improves deployment and runtime debugging context.',
+      expected_outcomes: [
+        'Runtime service map',
+        'Health/metrics endpoint inventory',
+        'Operational troubleshooting playbook references'
+      ],
+      install_hint: 'klever addons install runtime-observability'
+    });
+  }
+
+  suggestions.push({
+    addon_id: 'klever-addon-architecture-adr-index',
+    confidence: 0.74,
+    reason: 'Architecture decision indexing improves reliability for multi-repo feature planning.',
+    expected_outcomes: ['Normalized ADR timeline', 'Superseded decision map', 'Decision-aware implementation guidance'],
+    install_hint: 'klever addons install architecture-adr-index'
+  });
+
+  return {
+    generated_at: new Date().toISOString(),
+    scan_roots: repositoryContext.scanned_roots || [],
+    source_map: deepArtifacts?.source_map || null,
+    intelligence_index: repositoryIntelligence?.index || null,
+    repositories_scanned: summaries.length,
+    suggestions
+  };
+}
+
+function renderAddonSuggestionsMarkdown(payload) {
+  const lines = ['# Addon Suggestions', ''];
+  lines.push(`- generated_at: ${payload.generated_at}`);
+  lines.push(`- repositories_scanned: ${payload.repositories_scanned}`);
+  lines.push('');
+  lines.push('## Recommendations');
+  lines.push('');
+  for (const suggestion of payload.suggestions || []) {
+    lines.push(`- ${suggestion.addon_id} (confidence: ${suggestion.confidence})`);
+    lines.push(`  - reason: ${suggestion.reason}`);
+    lines.push(`  - install: \`${suggestion.install_hint}\``);
+    for (const outcome of suggestion.expected_outcomes || []) {
+      lines.push(`  - outcome: ${outcome}`);
+    }
+  }
+  if (!payload.suggestions || payload.suggestions.length === 0) {
+    lines.push('- none');
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function buildAddonSuggestionsArtifacts(root, repositoryContext, repositoryIntelligence, deepArtifacts) {
+  const outDir = path.join(root, 'context-engineering', 'sources');
+  await mkdir(outDir, { recursive: true });
+  const payload = detectAddonSuggestions(repositoryContext, repositoryIntelligence, deepArtifacts);
+  const jsonPath = path.join(outDir, 'addon-suggestions.json');
+  const mdPath = path.join(outDir, 'addon-suggestions.md');
+  await writeFile(jsonPath, JSON.stringify(payload, null, 2), 'utf8');
+  await writeFile(mdPath, renderAddonSuggestionsMarkdown(payload), 'utf8');
+  return {
+    json: path.relative(root, jsonPath),
+    markdown: path.relative(root, mdPath),
+    count: (payload.suggestions || []).length
+  };
+}
+
 async function buildSystemMapArtifacts(root, repositoryContext, repositoryIntelligence) {
   const outDir = path.join(root, 'context-engineering', 'sources');
   await mkdir(outDir, { recursive: true });
@@ -1253,6 +1397,9 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   if (report.system_map?.json) {
     lines.push(`- system_map: \`${report.system_map.json}\``);
   }
+  if (report.addon_suggestions?.json) {
+    lines.push(`- addon_suggestions: \`${report.addon_suggestions.json}\``);
+  }
   lines.push('');
   lines.push('### Working Model');
   lines.push('');
@@ -1270,7 +1417,8 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   lines.push('5. `context-engineering/sources/repositories/mcp-suggestions.json` (recommended MCP integrations).');
   lines.push('6. `context-engineering/sources/repositories/*.intelligence.md` (LLM repository intelligence and onboarding guidance).');
   lines.push('7. `context-engineering/sources/system-map.json` (cross-repository topology and inferred links).');
-  lines.push('8. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
+  lines.push('8. `context-engineering/sources/addon-suggestions.json` (recommended second-row context addons).');
+  lines.push('9. `context-engineering/sources/repositories/*.md` (repository-level summaries).');
   lines.push('');
   lines.push('Do not skip this bootstrap sequence. Build feature suggestions only after these sources are loaded.');
   lines.push('If any required artifact is missing or older than 24h, run `klever scan --scan-executor llm-api --scan-method deep --write` and reload context.');
@@ -1280,6 +1428,7 @@ function renderManagedAgentsSection(root, report, repositoryContext) {
   lines.push('- Required artifacts must include provenance metadata, confidence score, and assumptions.');
   lines.push('- Treat low-confidence areas as hypotheses and call them out before implementation.');
   lines.push('- Stop and request a context refresh when artifact freshness SLA is violated.');
+  lines.push('- Install suggested addons when repository signals indicate specialized domains (e.g., Odoo, analytics, persistence).');
   lines.push('');
   lines.push('### Repositories');
   lines.push('');
@@ -1518,6 +1667,7 @@ async function runScanCommand(targetDir, options) {
   report.deep_artifacts = deepArtifacts;
   report.repository_intelligence = null;
   report.system_map = null;
+  report.addon_suggestions = null;
 
   if (scanExecution.executor === 'llm-api') {
     if (scanExecution.method === 'deep') {
@@ -1545,6 +1695,12 @@ async function runScanCommand(targetDir, options) {
   }
 
   report.system_map = await buildSystemMapArtifacts(root, repositoryContext, report.repository_intelligence);
+  report.addon_suggestions = await buildAddonSuggestionsArtifacts(
+    root,
+    repositoryContext,
+    report.repository_intelligence,
+    deepArtifacts
+  );
 
   const agentsResult = await ensureAgentsHandbook(root, report, repositoryContext);
   if (agentsResult.created || agentsResult.updated) {
@@ -1587,6 +1743,10 @@ async function runScanCommand(targetDir, options) {
     if (report.system_map?.json) {
       console.log(`- system_map: ${report.system_map.json}`);
     }
+    if (report.addon_suggestions?.json) {
+      console.log(`- addon_suggestions: ${report.addon_suggestions.json}`);
+      console.log(`- addon_suggestions_count: ${report.addon_suggestions.count}`);
+    }
     if (report.scan_execution_result?.prompt_path) {
       console.log(`- delegated_prompt: ${report.scan_execution_result.prompt_path}`);
     }
@@ -1622,7 +1782,7 @@ async function runAddCommand(source, targetDir, options) {
 
   await ensureCatalog(catalogPath);
 
-  const cloneResult = await cloneRepositoryIntoWorkspace(source, root);
+  const cloneResult = await cloneRepositoryIntoWorkspace(source, root, options);
   const localRepoRelativePath = path.relative(root, cloneResult.destination);
   const sourceId = options.sourceId || cloneResult.repoName;
   const domain = options.sourceDomain || 'code';
@@ -1672,6 +1832,7 @@ async function runAddCommand(source, targetDir, options) {
   console.log(`- local_path: ${cloneResult.destination}`);
   if (cloneResult.cloned) {
     console.log('- clone: completed');
+    console.log(`- clone_mode: ${options.fullHistory ? 'full-history' : 'shallow-depth-1'}`);
   } else {
     console.log('- clone: skipped (already exists)');
   }
