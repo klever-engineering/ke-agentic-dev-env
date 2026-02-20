@@ -103,7 +103,7 @@ Commands:
   wrap    Add agentic scaffold files to an existing repository.
   scan    Inspect workspace readiness and build repository context artifacts.
   add     Clone a repository into /repositories and register it in context catalog.
-  addons  List or install addon packages into workspace internal toolkit.
+  addons  List, install, and run addon packages in workspace internal toolkit.
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
