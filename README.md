@@ -44,6 +44,9 @@ klever addons list .
 
 # install addon package into internal toolkit
 klever addons install klever-addon-odoo-business-model .
+
+# execute installed addon against workspace context
+klever addons run klever-addon-odoo-business-model . --repo odoo
 ```
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
@@ -68,6 +71,7 @@ klever addons install klever-addon-odoo-business-model .
   - `context-engineering/scan/delegated-scan-request.md`
 
 `klever addons install` installs npm addon packages into `.klever/toolkit/` inside the workspace and tracks them in `.klever/toolkit/addons.json`.
+`klever addons run` executes installed addon binaries through the toolkit (`npm exec --prefix .klever/toolkit ...`).
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
 

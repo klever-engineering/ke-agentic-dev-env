@@ -5,17 +5,33 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { PROFILES, runScaffold } from './scaffold.mjs';
 
 const MAJOR_PROVIDERS = ['openai', 'anthropic', 'gemini'];
 const MANAGED_AGENTS_START = '<!-- klever:managed:start -->';
 const MANAGED_AGENTS_END = '<!-- klever:managed:end -->';
+const CLI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ADDON_PACKAGE_MAP = {
   'klever-addon-postgres-context': '@klever/addon-postgres-context',
   'klever-addon-odoo-business-model': '@klever/addon-odoo-business-model',
   'klever-addon-analytics-context': '@klever/addon-analytics-context',
   'klever-addon-runtime-observability': '@klever/addon-runtime-observability',
   'klever-addon-architecture-adr-index': '@klever/addon-architecture-adr-index'
+};
+const ADDON_ALIAS_MAP = {
+  'postgres-context': 'klever-addon-postgres-context',
+  'odoo-business-model': 'klever-addon-odoo-business-model',
+  'analytics-context': 'klever-addon-analytics-context',
+  'runtime-observability': 'klever-addon-runtime-observability',
+  'architecture-adr-index': 'klever-addon-architecture-adr-index'
+};
+const ADDON_LOCAL_DIR_MAP = {
+  'klever-addon-odoo-business-model': 'odoo-business-model'
+};
+const ADDON_BIN_MAP = {
+  'klever-addon-odoo-business-model': 'klever-addon-odoo-business-model',
+  '@klever/addon-odoo-business-model': 'klever-addon-odoo-business-model'
 };
 
 const FLAG_CONFIG = {
@@ -80,6 +96,7 @@ Usage:
   klever add <git-repository-url> [target-dir] [options]
   klever addons list [target-dir]
   klever addons install <addon-id|npm-package> [target-dir] [options]
+  klever addons run <addon-id|npm-package> [target-dir] [options]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
@@ -116,6 +133,9 @@ Add options:
 
 Addons install options:
   --package <name>         Force npm package name for addon installation.
+
+Addons run options:
+  --repo <name>            Optional repository name hint passed to addon.
 
 General:
   -h, --help               Show this help.
@@ -1187,29 +1207,46 @@ async function ensureAddonToolkit(root) {
 }
 
 async function resolveAddonFromSuggestions(root, addonIdOrPackage) {
+  const normalizedInput = ADDON_ALIAS_MAP[addonIdOrPackage] || addonIdOrPackage;
   const suggestionsPath = path.join(root, 'context-engineering', 'sources', 'addon-suggestions.json');
   const suggestions = await readJsonFileSafe(suggestionsPath);
   const suggestion =
-    suggestions?.suggestions?.find((item) => item.addon_id === addonIdOrPackage || item.npm_package === addonIdOrPackage) ||
+    suggestions?.suggestions?.find((item) => item.addon_id === normalizedInput || item.npm_package === normalizedInput) ||
     null;
   if (!suggestion) {
     return {
-      addonId: addonIdOrPackage,
-      packageName: ADDON_PACKAGE_MAP[addonIdOrPackage] || addonIdOrPackage,
+      addonId: normalizedInput,
+      packageName: ADDON_PACKAGE_MAP[normalizedInput] || normalizedInput,
       fromSuggestions: false
     };
   }
   return {
     addonId: suggestion.addon_id,
-    packageName: suggestion.npm_package || ADDON_PACKAGE_MAP[suggestion.addon_id] || addonIdOrPackage,
+    packageName: suggestion.npm_package || ADDON_PACKAGE_MAP[suggestion.addon_id] || normalizedInput,
     fromSuggestions: true
   };
 }
 
+async function resolveAddonInstallSpec(addonId, packageName, explicitPackage) {
+  if (explicitPackage) {
+    return { installSpec: explicitPackage, source: 'explicit-package' };
+  }
+
+  const localDir = ADDON_LOCAL_DIR_MAP[addonId];
+  if (localDir) {
+    const localPath = path.resolve(CLI_DIR, '..', 'addons', localDir);
+    if (await pathExists(localPath)) {
+      return { installSpec: localPath, source: 'bundled-local-addon', localPath };
+    }
+  }
+
+  return { installSpec: packageName, source: 'npm-registry' };
+}
+
 async function runAddonsCommand(parsed) {
   const action = parsed.positional[1];
-  if (!action || !['list', 'install'].includes(action)) {
-    throw new Error('Usage: klever addons <list|install> [addon-id|npm-package] [target-dir] [options]');
+  if (!action || !['list', 'install', 'run'].includes(action)) {
+    throw new Error('Usage: klever addons <list|install|run> [addon-id|npm-package] [target-dir] [options]');
   }
 
   if (action === 'list') {
@@ -1237,6 +1274,47 @@ async function runAddonsCommand(parsed) {
     return;
   }
 
+  if (action === 'run') {
+    const addonInput = parsed.positional[2];
+    if (!addonInput) {
+      throw new Error('Usage: klever addons run <addon-id|npm-package> [target-dir] [options]');
+    }
+    const targetArg = parsed.positional[3] || '.';
+    const root = path.resolve(process.cwd(), targetArg);
+    const paths = await ensureAddonToolkit(root);
+    const registry = await readJsonFileSafe(paths.registryPath);
+    const installed = (registry?.addons || []).find(
+      (item) =>
+        item.addon_id === addonInput ||
+        item.npm_package === addonInput ||
+        item.addon_id === (ADDON_ALIAS_MAP[addonInput] || addonInput)
+    );
+    if (!installed) {
+      throw new Error(`Addon is not installed in toolkit: ${addonInput}`);
+    }
+
+    const binName = ADDON_BIN_MAP[installed.addon_id] || ADDON_BIN_MAP[installed.npm_package];
+    if (!binName) {
+      throw new Error(`No runnable binary mapping found for addon: ${installed.addon_id}`);
+    }
+
+    const execArgs = ['exec', '--prefix', paths.toolkitRoot, binName, '--', '--workspace', root];
+    if (parsed.options.repo) {
+      execArgs.push('--repo', parsed.options.repo);
+    }
+    const code = await runProcess('npm', execArgs, root);
+    if (code !== 0) {
+      throw new Error(`Addon run failed for ${installed.addon_id}`);
+    }
+
+    console.log('Addon executed');
+    console.log(`- workspace: ${root}`);
+    console.log(`- addon_id: ${installed.addon_id}`);
+    console.log(`- npm_package: ${installed.npm_package}`);
+    console.log(`- binary: ${binName}`);
+    return;
+  }
+
   const addonInput = parsed.positional[2];
   if (!addonInput) {
     throw new Error('Usage: klever addons install <addon-id|npm-package> [target-dir] [options]');
@@ -1245,26 +1323,30 @@ async function runAddonsCommand(parsed) {
   const root = path.resolve(process.cwd(), targetArg);
   const paths = await ensureAddonToolkit(root);
   const resolved = await resolveAddonFromSuggestions(root, addonInput);
-  const packageName = parsed.options.addonPackage || resolved.packageName;
-  const installCode = await runProcess('npm', ['install', '--prefix', paths.toolkitRoot, packageName], root);
+  const installPlan = await resolveAddonInstallSpec(resolved.addonId, resolved.packageName, parsed.options.addonPackage);
+  const installCode = await runProcess('npm', ['install', '--prefix', paths.toolkitRoot, installPlan.installSpec], root);
   if (installCode !== 0) {
-    throw new Error(`Failed to install addon package: ${packageName}`);
+    throw new Error(`Failed to install addon package: ${installPlan.installSpec}`);
   }
 
   const registry = (await readJsonFileSafe(paths.registryPath)) || { installed_at: new Date().toISOString(), addons: [] };
   const nextAddons = (registry.addons || []).filter((item) => item.addon_id !== resolved.addonId);
   nextAddons.push({
     addon_id: resolved.addonId,
-    npm_package: packageName,
+    npm_package: resolved.packageName,
+    install_spec: installPlan.installSpec,
     installed_at: new Date().toISOString(),
-    source: resolved.fromSuggestions ? 'suggested' : 'manual'
+    source: installPlan.source,
+    suggested: resolved.fromSuggestions
   });
   await writeFile(paths.registryPath, JSON.stringify({ ...registry, addons: nextAddons }, null, 2), 'utf8');
 
   console.log('Addon installed');
   console.log(`- workspace: ${root}`);
   console.log(`- addon_id: ${resolved.addonId}`);
-  console.log(`- npm_package: ${packageName}`);
+  console.log(`- npm_package: ${resolved.packageName}`);
+  console.log(`- install_spec: ${installPlan.installSpec}`);
+  console.log(`- install_source: ${installPlan.source}`);
   console.log(`- toolkit_root: ${paths.toolkitRoot}`);
   console.log(`- registry: ${path.relative(root, paths.registryPath)}`);
 }

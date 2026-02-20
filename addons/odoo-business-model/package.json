@@ -1,0 +1,20 @@
+{
+  "name": "@klever/addon-odoo-business-model",
+  "version": "0.1.0",
+  "private": false,
+  "description": "Klever addon: Odoo business and module model context generator",
+  "type": "module",
+  "bin": {
+    "klever-addon-odoo-business-model": "src/cli.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "klever",
+    "odoo",
+    "context-engineering",
+    "addon"
+  ],
+  "license": "MIT"
+}
