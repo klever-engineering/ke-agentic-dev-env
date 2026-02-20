@@ -1,16 +1,28 @@
 {
   "name": "@klever/agentic-environment",
-  "version": "0.2.0",
-  "description": "Bootstrap or wrap repositories with a generic agentic development environment",
+  "version": "0.3.0",
+  "description": "Context-engineering CLI to initialize and operate multi-repository agentic development environments",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/klever-engineering/ke-agentic-dev-env-codex.git"
+    "url": "git+https://github.com/klever-engineering/ke-agentic-dev-env.git"
   },
-  "homepage": "https://github.com/klever-engineering/ke-agentic-dev-env-codex#readme",
+  "homepage": "https://github.com/klever-engineering/ke-agentic-dev-env#readme",
   "bugs": {
-    "url": "https://github.com/klever-engineering/ke-agentic-dev-env-codex/issues"
+    "url": "https://github.com/klever-engineering/ke-agentic-dev-env/issues"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "templates",
+    "addons",
+    "docs",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
   "bin": {
     "klever": "src/cli.mjs",
     "klever-agentic": "src/cli.mjs"
@@ -24,10 +36,14 @@
   },
   "keywords": [
     "agentic",
+    "agents",
+    "ai",
+    "context-engineering",
+    "developer-tooling",
     "developer-experience",
-    "template",
     "cli",
-    "context-engineering"
+    "mcp",
+    "template"
   ],
   "author": "Klever Engineering",
   "license": "MIT"

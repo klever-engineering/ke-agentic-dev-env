@@ -1,8 +1,8 @@
-# ke-agentic-dev-env-codex
+# ke-agentic-dev-env
 
-[![CI](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env-codex/actions/workflows/ci.yml)
+[![CI](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](./CHANGELOG.md)
 
 Generic template repository and npm CLI scaffold for agentic development environments.
 
@@ -129,6 +129,12 @@ npm test
 
 ## Release notes
 
-- Current release line: `v0.2.0`
+- Current release line: `v0.3.0`
 - Changelog: `CHANGELOG.md`
 - License: `LICENSE`
+
+## Community and governance
+
+- Contribution guide: `CONTRIBUTING.md`
+- Code of conduct: `CODE_OF_CONDUCT.md`
+- Security policy: `SECURITY.md`

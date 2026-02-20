@@ -4,6 +4,31 @@ All notable changes to this project are documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.3.0] - 2026-02-20
+
+### Added
+
+- Open-source governance baseline:
+  - `CONTRIBUTING.md`
+  - `CODE_OF_CONDUCT.md`
+  - `SECURITY.md`
+  - GitHub issue templates (`bug_report`, `feature_request`)
+  - pull request template
+  - Dependabot configuration for npm and GitHub Actions
+- Packaging hardening:
+  - explicit `files` allowlist in `package.json`
+  - `publishConfig.access=public` for npm scoped publish
+
+### Changed
+
+- Repository naming and metadata updated from `ke-agentic-dev-env-codex` to `ke-agentic-dev-env`.
+- `package.json` repository/homepage/issues URLs updated to the new repository path.
+- README badges and release line updated to `v0.3.0`.
+
+### Removed
+
+- `ROADMAP.md` removed from repository history and current tree.
+
 ## [0.2.0] - 2026-02-18
 
 ### Added
