@@ -147,6 +147,85 @@ The most important reusable capability in this scaffold is context engineering:
 npm test
 ```
 
+## Build, Package, Publish, Release
+
+This project is a Node CLI package (`@klever/agentic-environment`) with binary `klever`.
+
+### 1) Build and verify the CLI locally
+
+```bash
+# run unit tests
+npm test
+
+# verify package bundle content/size
+npm pack --dry-run
+
+# create a local tarball package
+npm pack
+```
+
+### 2) Install and validate the CLI globally from local build
+
+```bash
+# install local tarball globally
+npm install -g ./klever-agentic-environment-<version>.tgz
+
+# verify command is available
+klever --help
+```
+
+### 3) Publish to npm
+
+Prerequisites:
+- npm account with publish rights for `@klever` scope
+- `npm login`
+
+```bash
+# publish public scoped package
+npm publish --access public
+```
+
+### 4) Release a new version (recommended workflow)
+
+```bash
+# create feature/fix branch
+git checkout -b feat/<change-name>
+
+# implement changes + update changelog
+# then commit and push branch
+git add .
+git commit -m "feat: <summary>"
+git push -u origin feat/<change-name>
+```
+
+Create PR to `main` and merge after CI passes.
+
+Then prepare release on `main`:
+
+```bash
+git checkout main
+git pull
+
+# bump version (choose one)
+npm version patch
+# or: npm version minor
+# or: npm version major
+
+# push commit and tag
+git push origin main --follow-tags
+```
+
+Create GitHub release:
+
+```bash
+gh release create v<version> --title "v<version>" --notes-file <release-notes.md> --target main
+```
+
+After publishing and release creation, verify:
+- npm package availability (`npm view @klever/agentic-environment version`)
+- GitHub release page
+- `npm install -g @klever/agentic-environment` in a clean environment
+
 ## Release notes
 
 - Current release line: `v0.3.0`
