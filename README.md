@@ -47,6 +47,12 @@ klever addons install klever-addon-odoo-business-model .
 
 # execute installed addon against workspace context
 klever addons run klever-addon-odoo-business-model . --repo odoo
+
+# suggest trusted MCP servers based on scanned technology
+klever mcp suggest .
+
+# install/register MCP servers for VSCode/Codex/Claude conventions
+klever mcp install . --servers github,postgres --client all --register-mode auto
 ```
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
@@ -72,6 +78,20 @@ klever addons run klever-addon-odoo-business-model . --repo odoo
 
 `klever addons install` installs npm addon packages into `.klever/toolkit/` inside the workspace and tracks them in `.klever/toolkit/addons.json`.
 `klever addons run` executes installed addon binaries through the toolkit (`npm exec --prefix .klever/toolkit ...`).
+`klever mcp suggest` proposes trusted MCP servers from:
+- Docker Desktop MCP Toolkit
+- VSCode `@mcp` servers catalog
+
+`klever mcp install` registers selected servers into:
+- `.vscode/mcp.json`
+- `.mcp.json` (Claude project convention)
+- `.codex/mcp.json` (Codex project convention)
+
+When `--register-mode auto|cli` is used, Klever can also attempt best-effort registration through:
+- `codex mcp add ...`
+- `claude mcp add ...`
+
+If authentication is missing, Klever reports required env vars in `context-engineering/scan/mcp-install-summary.json`.
 
 Initialization asks for your LLM provider/API key (`openai`, `anthropic`, or `gemini`) and keeps the key in runtime memory/environment only. It is not persisted to scaffold files.
 
