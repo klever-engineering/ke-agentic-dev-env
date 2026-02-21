@@ -57,6 +57,12 @@ klever mcp suggest .
 
 # install/register MCP servers for VSCode/Codex/Claude conventions
 klever mcp install . --servers github,postgres --client all --register-mode auto
+
+# initialize workspace defaults used by all commands
+klever config init .
+
+# inspect effective defaults (global + workspace merge)
+klever config show . --json
 ```
 
 Short aliases:
@@ -67,6 +73,29 @@ Short aliases:
 - `klever ad` -> `klever addons`
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
+`klever scan` with no target runs against the current working directory and auto-scans the `repositories/` folder when present.
+
+## Persistent Defaults
+
+Klever supports two config scopes:
+
+- Global: `~/.config/klever/config.json` (or `KLEVER_CONFIG_FILE`)
+- Workspace: `<workspace>/.klever/config.json`
+
+Commands:
+
+```bash
+# global defaults
+klever config init --global
+klever config show --global --json
+
+# workspace defaults
+klever config init .              # writes .klever/config.json
+klever config show . --json
+```
+
+Merge order is `global -> workspace -> explicit CLI flags`.
+This makes defaults predictable while still allowing one-off overrides.
 
 `klever scan` now:
 - detects local coding agents (`codex`, `copilot`, `claude`, `gemini`) and allows delegating scan execution
