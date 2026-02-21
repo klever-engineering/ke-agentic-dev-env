@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.3.1] - 2026-02-21
+
+### Added
+
+- New MCP command family:
+  - `klever mcp suggest [target-dir]`
+  - `klever mcp install [target-dir] --servers <ids> --client <vscode|codex|claude|all>`
+- Trusted MCP recommendation model from:
+  - Docker Desktop MCP Toolkit
+  - VSCode `@mcp` servers catalog
+- Dynamic MCP suggestions derived from scanned technology signals in repository source maps.
+- MCP registration outputs for client conventions:
+  - `.vscode/mcp.json`
+  - `.mcp.json` (Claude project scope)
+  - `.codex/mcp.json`
+- Installation summary artifacts:
+  - `context-engineering/scan/mcp-install-summary.json`
+  - `context-engineering/scan/mcp-install-summary.md`
+
+### Changed
+
+- `mcp-suggestions` generation now uses trusted-source catalog mappings instead of ad-hoc server identifiers.
+- CLI help updated with MCP options (`--servers`, `--client`, `--all`, `--register-mode`).
+
 ## [0.3.0] - 2026-02-20
 
 ### Added

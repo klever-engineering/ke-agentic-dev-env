@@ -33,6 +33,76 @@ const ADDON_BIN_MAP = {
   'klever-addon-odoo-business-model': 'klever-addon-odoo-business-model',
   '@klever/addon-odoo-business-model': 'klever-addon-odoo-business-model'
 };
+const MCP_CLIENT_CONFIG_PATHS = {
+  vscode: path.join('.vscode', 'mcp.json'),
+  claude: '.mcp.json',
+  codex: path.join('.codex', 'mcp.json')
+};
+const TRUSTED_MCP_SERVER_CATALOG = [
+  {
+    id: 'github',
+    title: 'GitHub MCP Server',
+    source: 'vscode-mcp-servers-catalog',
+    command: 'docker',
+    args: ['run', '-i', '--rm', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server:latest'],
+    tags: ['repo', 'git', 'delivery'],
+    auth: ['GITHUB_PERSONAL_ACCESS_TOKEN']
+  },
+  {
+    id: 'playwright',
+    title: 'Playwright MCP',
+    source: 'vscode-mcp-servers-catalog',
+    command: 'npx',
+    args: ['-y', '@playwright/mcp@latest'],
+    tags: ['frontend', 'ui', 'e2e'],
+    auth: []
+  },
+  {
+    id: 'postgres',
+    title: 'PostgreSQL MCP Server',
+    source: 'docker-desktop-mcp-toolkit',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost:5432/postgres'],
+    tags: ['database', 'sql', 'python', 'backend', 'odoo'],
+    auth: ['DATABASE_URL']
+  },
+  {
+    id: 'docker',
+    title: 'Docker MCP Toolkit',
+    source: 'docker-desktop-mcp-toolkit',
+    command: 'docker',
+    args: ['mcp', 'gateway', 'run', 'docker'],
+    tags: ['docker', 'runtime', 'infra'],
+    auth: []
+  },
+  {
+    id: 'kubernetes',
+    title: 'Kubernetes MCP Toolkit',
+    source: 'docker-desktop-mcp-toolkit',
+    command: 'docker',
+    args: ['mcp', 'gateway', 'run', 'kubernetes'],
+    tags: ['kubernetes', 'infra', 'runtime'],
+    auth: []
+  },
+  {
+    id: 'npm-docs',
+    title: 'NPM/Node Docs MCP',
+    source: 'vscode-mcp-servers-catalog',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-npm'],
+    tags: ['node', 'javascript', 'typescript', 'package-management'],
+    auth: []
+  },
+  {
+    id: 'filesystem',
+    title: 'Filesystem MCP Server',
+    source: 'vscode-mcp-servers-catalog',
+    command: 'npx',
+    args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    tags: ['all', 'filesystem'],
+    auth: []
+  }
+];
 
 const FLAG_CONFIG = {
   '--profile': { key: 'profile', type: 'value' },
@@ -55,7 +125,11 @@ const FLAG_CONFIG = {
   '--scan-executor': { key: 'scanExecutor', type: 'value' },
   '--scan-method': { key: 'scanMethod', type: 'value' },
   '--full-history': { key: 'fullHistory', type: 'boolean' },
-  '--package': { key: 'addonPackage', type: 'value' }
+  '--package': { key: 'addonPackage', type: 'value' },
+  '--servers': { key: 'mcpServers', type: 'value' },
+  '--client': { key: 'mcpClient', type: 'value' },
+  '--all': { key: 'mcpAll', type: 'boolean' },
+  '--register-mode': { key: 'mcpRegisterMode', type: 'value' }
 };
 
 function defaultOptions() {
@@ -80,7 +154,11 @@ function defaultOptions() {
     scanExecutor: 'auto',
     scanMethod: 'deep',
     fullHistory: false,
-    addonPackage: ''
+    addonPackage: '',
+    mcpServers: '',
+    mcpClient: 'all',
+    mcpAll: false,
+    mcpRegisterMode: 'auto'
   };
 }
 
@@ -97,6 +175,8 @@ Usage:
   klever addons list [target-dir]
   klever addons install <addon-id|npm-package> [target-dir] [options]
   klever addons run <addon-id|npm-package> [target-dir] [options]
+  klever mcp suggest [target-dir] [options]
+  klever mcp install [target-dir] [options]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
@@ -104,6 +184,7 @@ Commands:
   scan    Inspect workspace readiness and build repository context artifacts.
   add     Clone a repository into /repositories and register it in context catalog.
   addons  List, install, and run addon packages in workspace internal toolkit.
+  mcp     Suggest and register trusted MCP servers for VSCode/Codex/Claude.
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
@@ -136,6 +217,12 @@ Addons install options:
 
 Addons run options:
   --repo <name>            Optional repository name hint passed to addon.
+
+MCP options:
+  --servers <ids>          Comma-separated MCP server ids to install.
+  --all                    Install all suggested MCP servers.
+  --client <name>          vscode | codex | claude | all (default: all).
+  --register-mode <mode>   auto | file | cli (default: auto).
 
 General:
   -h, --help               Show this help.
@@ -593,28 +680,88 @@ function detectTechSignals(summary) {
     sql: extSet.has('.sql'),
     scripting: ['.sh', '.ps1'].some((ext) => extSet.has(ext)),
     python: summary.key_files.pyproject_toml || summary.key_files.requirements_txt || extSet.has('.py'),
-    node: summary.key_files.package_json || extSet.has('.js') || extSet.has('.ts')
+    node: summary.key_files.package_json || extSet.has('.js') || extSet.has('.ts'),
+    docker: summary.key_files.dockerfile || summary.key_files.docker_compose,
+    kubernetes: ['.yaml', '.yml'].some((ext) => extSet.has(ext)),
+    odoo:
+      String(summary.repository_name || '').toLowerCase().includes('odoo') ||
+      String(summary.repository_relative_path || '').toLowerCase().includes('odoo')
   };
 }
 
-function buildMcpSuggestionsForSummary(summary) {
+function detectTagsForSummary(summary) {
   const tech = detectTechSignals(summary);
-  const suggestions = [{ server: 'github', reason: 'Issue/PR/repository workflow for delivery operations.' }];
-
+  const tags = new Set(['repo']);
   if (tech.frontend) {
-    suggestions.push({ server: 'chrome-devtools', reason: 'Frontend stack detected; useful for UI inspection and debugging.' });
+    tags.add('frontend');
+    tags.add('ui');
   }
-  if (tech.sql || tech.python) {
-    suggestions.push({ server: 'postgres', reason: 'Data-layer signals detected (.sql/Python backend). Useful for schema and query context.' });
-  }
-  if (tech.infrastructure || summary.key_files.dockerfile || summary.key_files.docker_compose) {
-    suggestions.push({ server: 'infrastructure', reason: 'Infrastructure/runtime signals detected (Docker/Terraform/K8s style files).' });
+  if (tech.sql) tags.add('sql');
+  if (tech.python) {
+    tags.add('python');
+    tags.add('backend');
   }
   if (tech.node) {
-    suggestions.push({ server: 'npm-docs', reason: 'Node ecosystem detected; package and script references are useful context sources.' });
+    tags.add('node');
+    tags.add('javascript');
+    tags.add('typescript');
+  }
+  if (tech.infrastructure) tags.add('infra');
+  if (tech.docker) {
+    tags.add('docker');
+    tags.add('runtime');
+  }
+  if (tech.kubernetes) tags.add('kubernetes');
+  if (tech.odoo) tags.add('odoo');
+  return tags;
+}
+
+function reasonForMcpServer(server, summary) {
+  const tech = detectTechSignals(summary);
+  if (server.id === 'github') {
+    return 'Issue/PR/repository workflow support for delivery operations.';
+  }
+  if (server.id === 'playwright' && tech.frontend) {
+    return 'Frontend stack detected; browser automation and UI debugging become high value.';
+  }
+  if (server.id === 'postgres' && (tech.sql || tech.python || tech.odoo)) {
+    return 'Data-layer signals detected; database schema/query context is needed for implementation and debugging.';
+  }
+  if ((server.id === 'docker' || server.id === 'kubernetes') && (tech.infrastructure || tech.docker || tech.kubernetes)) {
+    return 'Runtime/infrastructure signals detected; container/cluster context helps diagnostics and operations.';
+  }
+  if (server.id === 'npm-docs' && tech.node) {
+    return 'Node ecosystem detected; package and scripts context is useful for dependency-aware changes.';
+  }
+  if (server.id === 'filesystem') {
+    return 'Filesystem context is a baseline capability for local project analysis.';
+  }
+  return `Suggested from trusted catalog ${server.source} based on repository technology profile.`;
+}
+
+function buildTrustedMcpCandidatesForSummary(summary) {
+  const tags = detectTagsForSummary(summary);
+  const selected = [];
+  for (const server of TRUSTED_MCP_SERVER_CATALOG) {
+    if (server.tags.includes('all') || server.tags.some((tag) => tags.has(tag))) {
+      selected.push({
+        server: server.id,
+        title: server.title,
+        source: server.source,
+        trusted: true,
+        reason: reasonForMcpServer(server, summary),
+        command: server.command,
+        args: server.args,
+        auth: server.auth
+      });
+    }
   }
 
-  return suggestions;
+  const unique = new Map();
+  for (const item of selected) {
+    unique.set(item.server, item);
+  }
+  return [...unique.values()];
 }
 
 function renderMcpSuggestionsMarkdown(data) {
@@ -627,6 +774,11 @@ function renderMcpSuggestionsMarkdown(data) {
     lines.push('');
     for (const suggestion of repo.suggestions) {
       lines.push(`- ${suggestion.server}: ${suggestion.reason}`);
+      lines.push(`  - source: ${suggestion.source}`);
+      lines.push(`  - trusted: ${suggestion.trusted ? 'yes' : 'no'}`);
+      if (suggestion.auth && suggestion.auth.length > 0) {
+        lines.push(`  - auth: ${suggestion.auth.join(', ')}`);
+      }
     }
     if (repo.suggestions.length === 0) {
       lines.push('- none');
@@ -634,6 +786,146 @@ function renderMcpSuggestionsMarkdown(data) {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+function parseCsv(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeMcpClient(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (['vscode', 'codex', 'claude', 'all'].includes(value)) return value;
+  return '';
+}
+
+function normalizeRegisterMode(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (['auto', 'file', 'cli'].includes(value)) return value;
+  return '';
+}
+
+function normalizeClientSelection(clientInput) {
+  const normalized = normalizeMcpClient(clientInput || 'all') || 'all';
+  if (normalized === 'all') return ['vscode', 'codex', 'claude'];
+  return [normalized];
+}
+
+function serverToVscodeConfig(root, server) {
+  const config = {
+    type: 'stdio',
+    command: server.command,
+    args: [...server.args]
+  };
+  if (server.id === 'filesystem') {
+    config.args.push(root);
+  }
+  return config;
+}
+
+function serverToClaudeConfig(root, server) {
+  const config = {
+    command: server.command,
+    args: [...server.args]
+  };
+  if (server.id === 'filesystem') {
+    config.args.push(root);
+  }
+  if (server.command === 'docker') {
+    config.type = 'stdio';
+  }
+  return config;
+}
+
+async function upsertVscodeMcpConfig(root, servers) {
+  const relPath = MCP_CLIENT_CONFIG_PATHS.vscode;
+  const filePath = path.join(root, relPath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const existing = (await readJsonFileSafe(filePath)) || {};
+  const next = {
+    ...existing,
+    servers: {
+      ...(existing.servers || {})
+    }
+  };
+  for (const server of servers) {
+    next.servers[server.id] = serverToVscodeConfig(root, server);
+  }
+  await writeFile(filePath, JSON.stringify(next, null, 2), 'utf8');
+  return relPath;
+}
+
+async function upsertCodexMcpConfig(root, servers) {
+  const relPath = MCP_CLIENT_CONFIG_PATHS.codex;
+  const filePath = path.join(root, relPath);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const existing = (await readJsonFileSafe(filePath)) || {};
+  const next = {
+    ...existing,
+    mcpServers: {
+      ...(existing.mcpServers || {})
+    }
+  };
+  for (const server of servers) {
+    next.mcpServers[server.id] = serverToClaudeConfig(root, server);
+  }
+  await writeFile(filePath, JSON.stringify(next, null, 2), 'utf8');
+  return relPath;
+}
+
+async function upsertClaudeMcpConfig(root, servers) {
+  const relPath = MCP_CLIENT_CONFIG_PATHS.claude;
+  const filePath = path.join(root, relPath);
+  const existing = (await readJsonFileSafe(filePath)) || {};
+  const next = {
+    ...existing,
+    mcpServers: {
+      ...(existing.mcpServers || {})
+    }
+  };
+  for (const server of servers) {
+    next.mcpServers[server.id] = serverToClaudeConfig(root, server);
+  }
+  await writeFile(filePath, JSON.stringify(next, null, 2), 'utf8');
+  return relPath;
+}
+
+function detectMissingAuth(server) {
+  const missing = [];
+  for (const envName of server.auth || []) {
+    if (!process.env[envName]) {
+      missing.push(envName);
+    }
+  }
+  return missing;
+}
+
+async function tryRegisterWithCodexCli(root, server) {
+  if (!(await commandExists('codex', root))) return { status: 'skipped', reason: 'codex_not_found' };
+  const hasMcp = await runQuietProcess('codex', ['mcp', 'add', '--help'], root);
+  if (hasMcp !== 0) return { status: 'skipped', reason: 'codex_mcp_add_not_supported' };
+  const args = ['mcp', 'add', server.id];
+  args.push('--', server.command, ...(server.args || []));
+  if (server.id === 'filesystem') args.push(root);
+  const code = await runProcess('codex', args, root);
+  return code === 0 ? { status: 'registered' } : { status: 'failed', reason: `exit_code_${code}` };
+}
+
+async function tryRegisterWithClaudeCli(root, server) {
+  if (!(await commandExists('claude', root))) return { status: 'skipped', reason: 'claude_not_found' };
+  const hasMcp = await runQuietProcess('claude', ['mcp', 'add', '--help'], root);
+  if (hasMcp !== 0) return { status: 'skipped', reason: 'claude_mcp_add_not_supported' };
+  const args = ['mcp', 'add', '--scope', 'project'];
+  args.push(server.id, '--', server.command, ...(server.args || []));
+  if (server.id === 'filesystem') args.push(root);
+  const code = await runProcess('claude', args, root);
+  return code === 0 ? { status: 'registered' } : { status: 'failed', reason: `exit_code_${code}` };
+}
+
+function detectMcpServerById(id) {
+  return TRUSTED_MCP_SERVER_CATALOG.find((server) => server.id === id) || null;
 }
 
 function repoIntelligencePrompt(documents, summary) {
@@ -981,7 +1273,7 @@ async function buildDeepRepositoryArtifacts(root, repositoryContext) {
     },
     repositories: (repositoryContext.summaries || []).map((summary) => ({
       repository: summary.repository_name,
-      suggestions: buildMcpSuggestionsForSummary(summary)
+      suggestions: buildTrustedMcpCandidatesForSummary(summary)
     }))
   };
 
@@ -1349,6 +1641,257 @@ async function runAddonsCommand(parsed) {
   console.log(`- install_source: ${installPlan.source}`);
   console.log(`- toolkit_root: ${paths.toolkitRoot}`);
   console.log(`- registry: ${path.relative(root, paths.registryPath)}`);
+}
+
+function renderMcpInstallSummaryMarkdown(summary) {
+  const lines = ['# MCP Installation Summary', ''];
+  lines.push(`- generated_at: ${summary.generated_at}`);
+  lines.push(`- workspace: ${summary.workspace}`);
+  lines.push(`- requested_clients: ${summary.requested_clients.join(', ')}`);
+  lines.push(`- register_mode: ${summary.register_mode}`);
+  lines.push('');
+  lines.push('## Servers');
+  lines.push('');
+  for (const item of summary.servers) {
+    lines.push(`- ${item.id} (${item.source})`);
+    lines.push(`  - auth_missing: ${item.auth_missing.length > 0 ? item.auth_missing.join(', ') : 'none'}`);
+    lines.push(`  - file_registration: ${item.file_registration.join(', ') || 'none'}`);
+    if (item.cli_registration && Object.keys(item.cli_registration).length > 0) {
+      for (const [client, status] of Object.entries(item.cli_registration)) {
+        lines.push(`  - cli_registration_${client}: ${status.status}${status.reason ? ` (${status.reason})` : ''}`);
+      }
+    }
+  }
+  if (summary.servers.length === 0) {
+    lines.push('- none');
+  }
+  lines.push('');
+  lines.push('## Next Steps');
+  lines.push('');
+  lines.push('- Authentication may still be required for servers that reported `auth_missing`.');
+  lines.push('- Validate connections with `codex mcp list` and `claude mcp list` plus VSCode MCP panel.');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function loadMcpSuggestionsForWorkspace(root) {
+  const sourceMapFile = path.join(root, 'context-engineering', 'sources', 'repositories', 'source-map.json');
+  const sourceMap = await readJsonFileSafe(sourceMapFile);
+  if (sourceMap?.repositories?.length) {
+    return {
+      source: path.relative(root, sourceMapFile),
+      repositories: sourceMap.repositories.map((entry) => ({
+        repository: entry.repository,
+        suggestions: buildTrustedMcpCandidatesForSummary({
+          repository_name: entry.repository,
+          repository_relative_path: entry.path,
+          key_files: entry.key_files || {},
+          top_extensions: entry.top_extensions || []
+        })
+      }))
+    };
+  }
+
+  const repositoryContext = await scanRepositoriesAndBuildArtifacts(root);
+  return {
+    source: 'runtime-detected',
+    repositories: (repositoryContext.summaries || []).map((summary) => ({
+      repository: summary.repository_name,
+      suggestions: buildTrustedMcpCandidatesForSummary(summary)
+    }))
+  };
+}
+
+function flattenSuggestedServers(payload) {
+  const map = new Map();
+  for (const repo of payload.repositories || []) {
+    for (const suggestion of repo.suggestions || []) {
+      const catalogMatch = detectMcpServerById(suggestion.server || suggestion.id);
+      if (!catalogMatch) continue;
+      if (!map.has(catalogMatch.id)) {
+        map.set(catalogMatch.id, {
+          id: catalogMatch.id,
+          title: catalogMatch.title,
+          source: catalogMatch.source,
+          trusted: true,
+          reason: suggestion.reason || `Suggested from trusted catalog ${catalogMatch.source}.`,
+          auth: [...(catalogMatch.auth || [])],
+          command: catalogMatch.command,
+          args: [...(catalogMatch.args || [])],
+          repositories: [repo.repository]
+        });
+      } else {
+        map.get(catalogMatch.id).repositories.push(repo.repository);
+      }
+    }
+  }
+  return [...map.values()];
+}
+
+async function runMcpCommand(parsed) {
+  const action = parsed.positional[1] || 'suggest';
+  if (!['suggest', 'install'].includes(action)) {
+    throw new Error('Usage: klever mcp <suggest|install> [target-dir] [options]');
+  }
+
+  const targetArg = parsed.positional[2] || '.';
+  const root = path.resolve(process.cwd(), targetArg);
+  if (!(await pathExists(root))) {
+    throw new Error(`Target directory not found: ${root}`);
+  }
+
+  const payload = await loadMcpSuggestionsForWorkspace(root);
+  const suggested = flattenSuggestedServers(payload);
+
+  if (action === 'suggest') {
+    if (parsed.options.json) {
+      console.log(
+        JSON.stringify(
+          {
+            workspace: root,
+            source: payload.source,
+            trusted_sources: ['docker-desktop-mcp-toolkit', 'vscode-mcp-servers-catalog'],
+            suggestions: suggested
+          },
+          null,
+          2
+        )
+      );
+      return;
+    }
+    console.log('Trusted MCP Suggestions');
+    console.log(`- workspace: ${root}`);
+    console.log(`- suggestions_source: ${payload.source}`);
+    console.log('- trusted_sources: docker-desktop-mcp-toolkit, vscode-mcp-servers-catalog');
+    console.log(`- suggested_servers: ${suggested.length}`);
+    for (const item of suggested) {
+      console.log(
+        `- ${item.id} | source=${item.source} | repos=${item.repositories.join(', ')} | auth=${
+          item.auth.length > 0 ? item.auth.join(',') : 'none'
+        }`
+      );
+      console.log(`  reason: ${item.reason}`);
+    }
+    if (suggested.length === 0) {
+      console.log('- none');
+    }
+    return;
+  }
+
+  const explicitServerIds = parseCsv(parsed.options.mcpServers);
+  let selectedIds = [];
+  if (parsed.options.mcpAll) {
+    selectedIds = suggested.map((item) => item.id);
+  } else if (explicitServerIds.length > 0) {
+    selectedIds = explicitServerIds;
+  } else if (process.stdin.isTTY && process.stdout.isTTY && !parsed.options.yes) {
+    const answer = await promptLine(
+      `Select MCP servers to install (comma separated, available: ${suggested.map((item) => item.id).join(', ')})`,
+      suggested.map((item) => item.id).join(',')
+    );
+    selectedIds = parseCsv(answer);
+  } else {
+    selectedIds = suggested.map((item) => item.id);
+  }
+
+  const selectedServers = [];
+  for (const id of selectedIds) {
+    const server = detectMcpServerById(id);
+    if (server) selectedServers.push(server);
+  }
+
+  if (selectedServers.length === 0) {
+    throw new Error('No valid MCP servers selected. Use `klever mcp suggest` to list available ids.');
+  }
+
+  const clients = normalizeClientSelection(parsed.options.mcpClient || 'all');
+  const registerMode = normalizeRegisterMode(parsed.options.mcpRegisterMode || 'auto') || 'auto';
+  const summary = {
+    generated_at: new Date().toISOString(),
+    workspace: root,
+    trusted_sources: ['docker-desktop-mcp-toolkit', 'vscode-mcp-servers-catalog'],
+    requested_clients: clients,
+    register_mode: registerMode,
+    servers: []
+  };
+
+  const fileRegistrations = new Map();
+  if (registerMode === 'auto' || registerMode === 'file') {
+    if (clients.includes('vscode')) {
+      fileRegistrations.set('vscode', await upsertVscodeMcpConfig(root, selectedServers));
+    }
+    if (clients.includes('codex')) {
+      fileRegistrations.set('codex', await upsertCodexMcpConfig(root, selectedServers));
+    }
+    if (clients.includes('claude')) {
+      fileRegistrations.set('claude', await upsertClaudeMcpConfig(root, selectedServers));
+    }
+  }
+
+  for (const server of selectedServers) {
+    const missingAuth = detectMissingAuth(server);
+    const item = {
+      id: server.id,
+      source: server.source,
+      auth_missing: missingAuth,
+      file_registration: [...fileRegistrations.entries()]
+        .map(([client, relPath]) => `${client}:${relPath}`),
+      cli_registration: {}
+    };
+
+    if (registerMode === 'auto' || registerMode === 'cli') {
+      if (clients.includes('codex')) {
+        item.cli_registration.codex = await tryRegisterWithCodexCli(root, server);
+      }
+      if (clients.includes('claude')) {
+        item.cli_registration.claude = await tryRegisterWithClaudeCli(root, server);
+      }
+    }
+
+    summary.servers.push(item);
+  }
+
+  const scanDir = path.join(root, 'context-engineering', 'scan');
+  await mkdir(scanDir, { recursive: true });
+  const summaryJsonPath = path.join(scanDir, 'mcp-install-summary.json');
+  const summaryMdPath = path.join(scanDir, 'mcp-install-summary.md');
+  await writeFile(summaryJsonPath, JSON.stringify(summary, null, 2), 'utf8');
+  await writeFile(summaryMdPath, renderMcpInstallSummaryMarkdown(summary), 'utf8');
+
+  if (parsed.options.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  console.log('MCP Installation Summary');
+  console.log(`- workspace: ${root}`);
+  console.log(`- selected_servers: ${selectedServers.map((item) => item.id).join(', ')}`);
+  console.log(`- clients: ${clients.join(', ')}`);
+  console.log(`- register_mode: ${registerMode}`);
+  for (const [client, relPath] of fileRegistrations.entries()) {
+    console.log(`- ${client}_config: ${relPath}`);
+  }
+  for (const server of summary.servers) {
+    if (server.auth_missing.length > 0) {
+      console.log(`- auth_required_for_${server.id}: ${server.auth_missing.join(', ')}`);
+    }
+    if (server.cli_registration.codex) {
+      console.log(
+        `- codex_cli_${server.id}: ${server.cli_registration.codex.status}${
+          server.cli_registration.codex.reason ? ` (${server.cli_registration.codex.reason})` : ''
+        }`
+      );
+    }
+    if (server.cli_registration.claude) {
+      console.log(
+        `- claude_cli_${server.id}: ${server.cli_registration.claude.status}${
+          server.cli_registration.claude.reason ? ` (${server.cli_registration.claude.reason})` : ''
+        }`
+      );
+    }
+  }
+  console.log(`- summary_json: ${path.relative(root, summaryJsonPath)}`);
+  console.log(`- summary_markdown: ${path.relative(root, summaryMdPath)}`);
 }
 
 async function buildSystemMapArtifacts(root, repositoryContext, repositoryIntelligence) {
@@ -2171,6 +2714,11 @@ async function main() {
 
     if (command === 'addons') {
       await runAddonsCommand(parsed);
+      return;
+    }
+
+    if (command === 'mcp') {
+      await runMcpCommand(parsed);
       return;
     }
 
