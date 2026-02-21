@@ -24,6 +24,9 @@ npm install -g @klever/agentic-environment
 ## Commands
 
 ```bash
+# opinionated default workflow (deep by default)
+klever up .
+
 # create a fresh environment
 klever init <target-dir> --profile foundation
 
@@ -32,6 +35,7 @@ klever wrap <target-dir> --profile full
 
 # inspect workspace and generate scan artifacts
 klever scan . --scan-executor auto --scan-method deep
+klever scan . --mode deep
 
 # clone and register external source repository
 klever add https://github.com/your-org/your-repo.git
@@ -54,6 +58,13 @@ klever mcp suggest .
 # install/register MCP servers for VSCode/Codex/Claude conventions
 klever mcp install . --servers github,postgres --client all --register-mode auto
 ```
+
+Short aliases:
+- `klever u` -> `klever up`
+- `klever s` -> `klever scan`
+- `klever m` -> `klever mcp`
+- `klever a` -> `klever add`
+- `klever ad` -> `klever addons`
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
 
