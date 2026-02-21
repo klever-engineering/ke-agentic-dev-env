@@ -129,7 +129,8 @@ const FLAG_CONFIG = {
   '--servers': { key: 'mcpServers', type: 'value' },
   '--client': { key: 'mcpClient', type: 'value' },
   '--all': { key: 'mcpAll', type: 'boolean' },
-  '--register-mode': { key: 'mcpRegisterMode', type: 'value' }
+  '--register-mode': { key: 'mcpRegisterMode', type: 'value' },
+  '--mode': { key: 'scanMode', type: 'value' }
 };
 
 function defaultOptions() {
@@ -158,7 +159,8 @@ function defaultOptions() {
     mcpServers: '',
     mcpClient: 'all',
     mcpAll: false,
-    mcpRegisterMode: 'auto'
+    mcpRegisterMode: 'auto',
+    scanMode: ''
   };
 }
 
@@ -171,6 +173,7 @@ Usage:
   klever init [target-dir] [options]
   klever wrap [target-dir] [options]
   klever scan [target-dir] [options]
+  klever up [target-dir] [options]
   klever add <git-repository-url> [target-dir] [options]
   klever addons list [target-dir]
   klever addons install <addon-id|npm-package> [target-dir] [options]
@@ -182,6 +185,7 @@ Commands:
   init    Create a fresh agentic workspace scaffold.
   wrap    Add agentic scaffold files to an existing repository.
   scan    Inspect workspace readiness and build repository context artifacts.
+  up      Run the default operator workflow: scan + optional trusted MCP setup.
   add     Clone a repository into /repositories and register it in context catalog.
   addons  List, install, and run addon packages in workspace internal toolkit.
   mcp     Suggest and register trusted MCP servers for VSCode/Codex/Claude.
@@ -202,6 +206,7 @@ Scan options:
   --write                  Persist scan report to context-engineering/scan/scan-summary.json.
   --scan-executor <name>   auto | llm-api | codex | copilot | claude | gemini.
   --scan-method <name>     quick | deep (default: deep).
+  --mode <name>            quick | balanced | deep (preset; default mode is deep for klever up).
 
 Add options:
   --id <value>             Source id override.
@@ -600,6 +605,14 @@ async function cloneRepositoryIntoWorkspace(source, root, options = {}) {
 function normalizeScanMethod(input) {
   const value = String(input || '').trim().toLowerCase();
   if (value === 'quick' || value === 'deep') {
+    return value;
+  }
+  return '';
+}
+
+function normalizeScanMode(input) {
+  const value = String(input || '').trim().toLowerCase();
+  if (['quick', 'balanced', 'deep'].includes(value)) {
     return value;
   }
   return '';
@@ -2391,7 +2404,18 @@ async function runScanCommand(targetDir, options) {
     throw new Error(`Target directory not found: ${root}`);
   }
 
-  const scanExecution = await selectScanExecution(options, root);
+  const presetMode = normalizeScanMode(options.scanMode);
+  const effectiveOptions = { ...options };
+  if (presetMode) {
+    const preset = scanPresetFromMode(presetMode);
+    effectiveOptions.scanMethod = preset.scanMethod;
+    if (!options.scanExecutor || options.scanExecutor === 'auto') {
+      effectiveOptions.scanExecutor = preset.scanExecutor;
+    }
+  }
+
+  const scanExecution = await selectScanExecution(effectiveOptions, root);
+  const quickPresetNoLlm = presetMode === 'quick';
 
   const checks = {
     hasAgents: await pathExists(path.join(root, 'AGENTS.md')),
@@ -2450,13 +2474,23 @@ async function runScanCommand(targetDir, options) {
   report.system_map = null;
   report.addon_suggestions = null;
 
-  if (scanExecution.executor === 'llm-api') {
+  if (quickPresetNoLlm) {
+    report.scan_execution_result = {
+      mode: 'quick-local',
+      status: 'completed',
+      reason: 'mode_quick_skips_llm_execution'
+    };
+  } else if (scanExecution.executor === 'llm-api') {
     if (scanExecution.method === 'deep') {
-      const llmSetup = await collectLlmSetup(options);
+      const llmSetup = await collectLlmSetup(effectiveOptions);
       report.repository_intelligence = await generateRepositoryIntelligence(root, llmSetup.provider, repositoryContext);
-      report.scan_execution_result = await runLlmBestEffortScan(root, { ...options, llmProvider: llmSetup.provider }, report);
+      report.scan_execution_result = await runLlmBestEffortScan(
+        root,
+        { ...effectiveOptions, llmProvider: llmSetup.provider },
+        report
+      );
     } else {
-      report.scan_execution_result = await runLlmBestEffortScan(root, options, report);
+      report.scan_execution_result = await runLlmBestEffortScan(root, effectiveOptions, report);
     }
   } else {
     const delegatedPromptPath = await prepareDelegatedScan(
@@ -2629,6 +2663,66 @@ async function runAddCommand(source, targetDir, options) {
   console.log(`- agents_handbook_updated: ${agentsResult.created || agentsResult.updated ? 'yes' : 'no'}`);
 }
 
+function scanPresetFromMode(modeInput) {
+  const mode = normalizeScanMode(modeInput) || 'deep';
+  if (mode === 'quick') {
+    return { mode, scanMethod: 'quick', scanExecutor: 'auto' };
+  }
+  if (mode === 'balanced') {
+    return { mode, scanMethod: 'deep', scanExecutor: 'auto' };
+  }
+  return { mode: 'deep', scanMethod: 'deep', scanExecutor: 'llm-api' };
+}
+
+async function runUpCommand(targetDir, options) {
+  const preset = scanPresetFromMode(options.scanMode);
+  const scanOptions = {
+    ...options,
+    write: true,
+    scanMethod: preset.scanMethod,
+    scanExecutor: preset.scanExecutor
+  };
+
+  console.log('Klever Up');
+  console.log(`- mode: ${preset.mode}`);
+  console.log(`- scan_executor: ${preset.scanExecutor}`);
+  console.log(`- scan_method: ${preset.scanMethod}`);
+  console.log('- step: scan');
+  await runScanCommand(targetDir, scanOptions);
+
+  if (preset.mode === 'quick') {
+    console.log('- step: mcp setup skipped (quick mode)');
+    return;
+  }
+
+  const root = path.resolve(process.cwd(), targetDir);
+  let shouldInstallMcp = Boolean(options.yes);
+  if (!shouldInstallMcp && process.stdin.isTTY && process.stdout.isTTY && !options.json) {
+    const answer = await promptLine('Install suggested trusted MCP servers now', 'y');
+    shouldInstallMcp = ['y', 'yes'].includes(String(answer).trim().toLowerCase());
+  }
+
+  if (!shouldInstallMcp) {
+    console.log('- step: mcp setup skipped');
+    console.log('- next: run `klever mcp suggest .` then `klever mcp install . --all` when ready');
+    return;
+  }
+
+  console.log('- step: mcp install');
+  const mcpParsed = {
+    positional: ['mcp', 'install', root],
+    options: {
+      ...defaultOptions(),
+      yes: options.yes,
+      json: options.json,
+      mcpAll: true,
+      mcpClient: 'all',
+      mcpRegisterMode: 'auto'
+    }
+  };
+  await runMcpCommand(mcpParsed);
+}
+
 async function runScaffoldCommand(command, targetArg, options) {
   if (!PROFILES.includes(options.profile)) {
     throw new Error(`Invalid profile "${options.profile}". Use one of: ${PROFILES.join(', ')}`);
@@ -2688,21 +2782,35 @@ async function main() {
   }
 
   const command = parsed.positional[0];
+  const aliasMap = {
+    u: 'up',
+    s: 'scan',
+    m: 'mcp',
+    a: 'add',
+    ad: 'addons'
+  };
+  const resolvedCommand = aliasMap[command] || command;
 
   try {
-    if (command === 'init' || command === 'wrap') {
+    if (resolvedCommand === 'init' || resolvedCommand === 'wrap') {
       const targetArg = parsed.positional[1] || '.';
-      await runScaffoldCommand(command, targetArg, parsed.options);
+      await runScaffoldCommand(resolvedCommand, targetArg, parsed.options);
       return;
     }
 
-    if (command === 'scan') {
+    if (resolvedCommand === 'up') {
+      const targetArg = parsed.positional[1] || '.';
+      await runUpCommand(targetArg, parsed.options);
+      return;
+    }
+
+    if (resolvedCommand === 'scan') {
       const targetArg = parsed.positional[1] || '.';
       await runScanCommand(targetArg, parsed.options);
       return;
     }
 
-    if (command === 'add') {
+    if (resolvedCommand === 'add') {
       const source = parsed.positional[1];
       if (!source) {
         throw new Error('Usage: klever add <git-repository-url> [target-dir] [options]');
@@ -2712,12 +2820,12 @@ async function main() {
       return;
     }
 
-    if (command === 'addons') {
+    if (resolvedCommand === 'addons') {
       await runAddonsCommand(parsed);
       return;
     }
 
-    if (command === 'mcp') {
+    if (resolvedCommand === 'mcp') {
       await runMcpCommand(parsed);
       return;
     }
