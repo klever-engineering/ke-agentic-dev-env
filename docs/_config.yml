@@ -1,0 +1,15 @@
+title: Klever Agentic Environment
+description: Generic Agentic Environment CLI and context-engineering playbook
+markdown: kramdown
+theme: minima
+plugins:
+  - jekyll-seo-tag
+header_pages:
+  - index.md
+  - default-workflow.md
+  - agent-friendly-examples.md
+  - troubleshooting.md
+  - architecture.md
+  - capability-matrix.md
+  - context-engineering-findings.md
+  - versioning-policy.md
