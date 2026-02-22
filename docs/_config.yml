@@ -8,6 +8,7 @@ header_pages:
   - index.md
   - default-workflow.md
   - agent-friendly-examples.md
+  - migrations.md
   - troubleshooting.md
   - architecture.md
   - capability-matrix.md
