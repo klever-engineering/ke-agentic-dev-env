@@ -129,7 +129,7 @@ async function collectInputDocuments(rootDir, maxFiles, maxCharsPerFile) {
   const allowed = new Set(['.md', '.txt', '.json', '.yaml', '.yml']);
   const selected = [];
 
-  for (const filePath of candidates.sort()) {
+  for (const filePath of candidates.sort((a, b) => a.localeCompare(b))) {
     if (selected.length >= maxFiles) {
       break;
     }
