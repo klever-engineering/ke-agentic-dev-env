@@ -1,6 +1,6 @@
 {
   "name": "@klever/agentic-environment",
-  "version": "0.3.0",
+  "version": "0.0.0-unreleased",
   "description": "Context-engineering CLI to initialize and operate multi-repository agentic development environments",
   "type": "module",
   "repository": {

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-unreleased-orange.svg)](./CHANGELOG.md)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
 [![Bugs](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=bugs)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
@@ -72,6 +72,9 @@ klever mcp suggest .
 # install/register MCP servers for VSCode/Codex/Claude conventions
 klever mcp install . --servers github,postgres --client all --register-mode auto
 
+# bypass safety restrictions only in trusted/private environments
+klever add <custom-source> . --unsafe
+
 # initialize workspace defaults used by all commands
 klever config init .
 
@@ -94,6 +97,18 @@ Short aliases:
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
 `klever scan` with no target runs against the current working directory and auto-scans the `repositories/` folder when present.
+
+## Security Defaults
+
+Klever runs in safe mode by default:
+
+- repository add accepts only GitHub URL formats (`https://github.com/...` or `git@github.com:...`)
+- addon installation is restricted to vetted packages (`@klever/*`) and bundled local addons
+- MCP CLI registration is downgraded to file registration in safe mode
+- migration rollback snapshot ids are validated against path traversal
+- LLM repository-intelligence prompts include prompt-injection guardrails
+
+Use `--unsafe` only for trusted environments when you explicitly need to disable these restrictions.
 
 ## Persistent Defaults
 
@@ -314,7 +329,7 @@ After publishing and release creation, verify:
 
 ## Release notes
 
-- Current release line: `v0.3.0`
+- Current release line: `unreleased`
 - Changelog: `CHANGELOG.md`
 - License: `LICENSE`
 
