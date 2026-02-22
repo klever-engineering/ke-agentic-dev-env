@@ -6,6 +6,7 @@ Klever is a CLI for building and operating an agentic development workspace.
 
 - [Default Workflow](./default-workflow.md)
 - [Agent-Friendly Examples](./agent-friendly-examples.md)
+- [Troubleshooting](./troubleshooting.md)
 - [Architecture](./architecture.md)
 - [Capability Matrix](./capability-matrix.md)
 - [Context Engineering Findings](./context-engineering-findings.md)

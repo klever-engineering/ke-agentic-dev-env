@@ -11,6 +11,7 @@ Generic template repository and npm CLI scaffold for agentic development environ
 - Docs entrypoint: `docs/index.md`
 - Default operator workflow: `docs/default-workflow.md`
 - Agent-oriented examples: `docs/agent-friendly-examples.md`
+- Troubleshooting: `docs/troubleshooting.md`
 
 This repository includes a GitHub Pages workflow (`.github/workflows/pages.yml`) that publishes the `docs/` folder.
 
