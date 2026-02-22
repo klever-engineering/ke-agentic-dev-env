@@ -24,6 +24,9 @@ npm install -g @klever/agentic-environment
 ## Commands
 
 ```bash
+# opinionated default workflow (deep by default)
+klever up .
+
 # create a fresh environment
 klever init <target-dir> --profile foundation
 
@@ -32,6 +35,7 @@ klever wrap <target-dir> --profile full
 
 # inspect workspace and generate scan artifacts
 klever scan . --scan-executor auto --scan-method deep
+klever scan . --mode deep
 
 # clone and register external source repository
 klever add https://github.com/your-org/your-repo.git
@@ -54,6 +58,13 @@ klever mcp suggest .
 # install/register MCP servers for VSCode/Codex/Claude conventions
 klever mcp install . --servers github,postgres --client all --register-mode auto
 ```
+
+Short aliases:
+- `klever u` -> `klever up`
+- `klever s` -> `klever scan`
+- `klever m` -> `klever mcp`
+- `klever a` -> `klever add`
+- `klever ad` -> `klever addons`
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
 
@@ -146,6 +157,85 @@ The most important reusable capability in this scaffold is context engineering:
 ```bash
 npm test
 ```
+
+## Build, Package, Publish, Release
+
+This project is a Node CLI package (`@klever/agentic-environment`) with binary `klever`.
+
+### 1) Build and verify the CLI locally
+
+```bash
+# run unit tests
+npm test
+
+# verify package bundle content/size
+npm pack --dry-run
+
+# create a local tarball package
+npm pack
+```
+
+### 2) Install and validate the CLI globally from local build
+
+```bash
+# install local tarball globally
+npm install -g ./klever-agentic-environment-<version>.tgz
+
+# verify command is available
+klever --help
+```
+
+### 3) Publish to npm
+
+Prerequisites:
+- npm account with publish rights for `@klever` scope
+- `npm login`
+
+```bash
+# publish public scoped package
+npm publish --access public
+```
+
+### 4) Release a new version (recommended workflow)
+
+```bash
+# create feature/fix branch
+git checkout -b feat/<change-name>
+
+# implement changes + update changelog
+# then commit and push branch
+git add .
+git commit -m "feat: <summary>"
+git push -u origin feat/<change-name>
+```
+
+Create PR to `main` and merge after CI passes.
+
+Then prepare release on `main`:
+
+```bash
+git checkout main
+git pull
+
+# bump version (choose one)
+npm version patch
+# or: npm version minor
+# or: npm version major
+
+# push commit and tag
+git push origin main --follow-tags
+```
+
+Create GitHub release:
+
+```bash
+gh release create v<version> --title "v<version>" --notes-file <release-notes.md> --target main
+```
+
+After publishing and release creation, verify:
+- npm package availability (`npm view @klever/agentic-environment version`)
+- GitHub release page
+- `npm install -g @klever/agentic-environment` in a clean environment
 
 ## Release notes
 

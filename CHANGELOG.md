@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 The format is inspired by Keep a Changelog and this project follows Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- New simplified operator workflow command:
+  - `klever up [target-dir]`
+  - runs scan with sensible mode presets and can continue to trusted MCP setup.
+- Command aliases for faster usage:
+  - `u`, `s`, `m`, `a`, `ad`
+- Scan preset flag:
+  - `klever scan --mode quick|balanced|deep`
+
+### Changed
+
+- CLI help expanded to document simplified flow and mode presets.
+
 ## [0.3.1] - 2026-02-21
 
 ### Added
