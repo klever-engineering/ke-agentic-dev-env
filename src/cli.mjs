@@ -602,7 +602,7 @@ function slugifySourceId(input) {
     .replace(/^git@/, '')
     .replace(/[/:.#?=&]+/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
+    .replace(/(^-|-$)/g, '');
 
   return normalized || `source-${Date.now()}`;
 }
