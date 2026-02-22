@@ -3,6 +3,10 @@
 [![CI](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml/badge.svg)](https://github.com/klever-engineering/ke-agentic-dev-env/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](./CHANGELOG.md)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=bugs)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
+[![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
+[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=klever-engineering_ke-agentic-dev-env&metric=code_smells)](https://sonarcloud.io/summary/new_code?id=klever-engineering_ke-agentic-dev-env)
 
 Generic template repository and npm CLI scaffold for agentic development environments.
 
