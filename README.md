@@ -15,6 +15,7 @@ Generic template repository and npm CLI scaffold for agentic development environ
 - Docs entrypoint: `docs/index.md`
 - Default operator workflow: `docs/default-workflow.md`
 - Agent-oriented examples: `docs/agent-friendly-examples.md`
+- Workspace migrations: `docs/migrations.md`
 - Troubleshooting: `docs/troubleshooting.md`
 
 This repository includes a GitHub Pages workflow (`.github/workflows/pages.yml`) that publishes the `docs/` folder.
@@ -139,6 +140,8 @@ Migration behavior:
 - idempotent writes (no-op when already up to date)
 - backup copies under `.klever/backups/<snapshot-id>/`
 - migration reports under `.klever/migrations/<snapshot-id>.json`
+
+Detailed guide: `docs/migrations.md`
 
 `klever scan` now:
 - detects local coding agents (`codex`, `copilot`, `claude`, `gemini`) and allows delegating scan execution
