@@ -2,6 +2,7 @@
 
 import process from 'node:process';
 import path from 'node:path';
+import os from 'node:os';
 import { spawn } from 'node:child_process';
 import readline from 'node:readline/promises';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -38,6 +39,26 @@ const MCP_CLIENT_CONFIG_PATHS = {
   claude: '.mcp.json',
   codex: path.join('.codex', 'mcp.json')
 };
+const KLEVER_CONFIG_KEYS = new Set([
+  'profile',
+  'projectName',
+  'org',
+  'repo',
+  'llmProvider',
+  'buildKnowledge',
+  'force',
+  'dryRun',
+  'yes',
+  'json',
+  'write',
+  'scanExecutor',
+  'scanMethod',
+  'fullHistory',
+  'mcpClient',
+  'mcpAll',
+  'mcpRegisterMode',
+  'scanMode'
+]);
 const TRUSTED_MCP_SERVER_CATALOG = [
   {
     id: 'github',
@@ -130,7 +151,8 @@ const FLAG_CONFIG = {
   '--client': { key: 'mcpClient', type: 'value' },
   '--all': { key: 'mcpAll', type: 'boolean' },
   '--register-mode': { key: 'mcpRegisterMode', type: 'value' },
-  '--mode': { key: 'scanMode', type: 'value' }
+  '--mode': { key: 'scanMode', type: 'value' },
+  '--global': { key: 'configGlobal', type: 'boolean' }
 };
 
 function defaultOptions() {
@@ -160,7 +182,8 @@ function defaultOptions() {
     mcpClient: 'all',
     mcpAll: false,
     mcpRegisterMode: 'auto',
-    scanMode: ''
+    scanMode: '',
+    configGlobal: false
   };
 }
 
@@ -180,6 +203,8 @@ Usage:
   klever addons run <addon-id|npm-package> [target-dir] [options]
   klever mcp suggest [target-dir] [options]
   klever mcp install [target-dir] [options]
+  klever config init [target-dir] [--global]
+  klever config show [target-dir] [--global]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
@@ -189,6 +214,7 @@ Commands:
   add     Clone a repository into /repositories and register it in context catalog.
   addons  List, install, and run addon packages in workspace internal toolkit.
   mcp     Suggest and register trusted MCP servers for VSCode/Codex/Claude.
+  config  Manage persistent defaults (global and workspace).
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
@@ -231,13 +257,15 @@ MCP options:
 
 General:
   -h, --help               Show this help.
+  --global                 Use global scope for config commands.
 `);
 }
 
 function parseArgs(argv) {
   const result = {
     positional: [],
-    options: defaultOptions()
+    options: defaultOptions(),
+    provided: new Set()
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -250,6 +278,7 @@ function parseArgs(argv) {
 
     if (token === '-h' || token === '--help') {
       result.options.help = true;
+      result.provided.add('help');
       continue;
     }
 
@@ -260,6 +289,7 @@ function parseArgs(argv) {
 
     if (config.type === 'boolean') {
       result.options[config.key] = true;
+      result.provided.add(config.key);
       continue;
     }
 
@@ -269,6 +299,7 @@ function parseArgs(argv) {
     }
 
     result.options[config.key] = nextValue;
+    result.provided.add(config.key);
     i += 1;
   }
 
@@ -282,6 +313,68 @@ async function readJsonFileSafe(filePath) {
     return JSON.parse(raw);
   } catch {
     return null;
+  }
+}
+
+function globalConfigPath() {
+  if (process.env.KLEVER_CONFIG_FILE) {
+    return path.resolve(process.env.KLEVER_CONFIG_FILE);
+  }
+  const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(xdg, 'klever', 'config.json');
+}
+
+function workspaceConfigPath(root) {
+  return path.join(root, '.klever', 'config.json');
+}
+
+function normalizeConfigPayload(payload) {
+  const input = payload && typeof payload === 'object' ? payload : {};
+  const normalized = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (!KLEVER_CONFIG_KEYS.has(key)) continue;
+    normalized[key] = value;
+  }
+  return normalized;
+}
+
+async function loadConfigFile(filePath) {
+  const data = await readJsonFileSafe(filePath);
+  return normalizeConfigPayload(data || {});
+}
+
+function inferTargetDirForCommand(resolvedCommand, positional) {
+  if (resolvedCommand === 'add') return positional[2] || '.';
+  if (resolvedCommand === 'addons') {
+    const action = positional[1];
+    if (action === 'list') return positional[2] || '.';
+    return positional[3] || '.';
+  }
+  if (resolvedCommand === 'mcp') return positional[2] || '.';
+  if (resolvedCommand === 'config') return positional[2] || '.';
+  return positional[1] || '.';
+}
+
+async function applyPersistentDefaults(parsed, resolvedCommand) {
+  if (resolvedCommand === 'config') return;
+
+  const globalPath = globalConfigPath();
+  const globalConfig = await loadConfigFile(globalPath);
+
+  const targetArg = inferTargetDirForCommand(resolvedCommand, parsed.positional);
+  const root = path.resolve(process.cwd(), targetArg);
+  const wsConfig =
+    (await pathExists(root).then((exists) => (exists ? loadConfigFile(workspaceConfigPath(root)) : {}))) || {};
+
+  for (const [key, value] of Object.entries(globalConfig)) {
+    if (!parsed.provided.has(key)) {
+      parsed.options[key] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(wsConfig)) {
+    if (!parsed.provided.has(key)) {
+      parsed.options[key] = value;
+    }
   }
 }
 
@@ -509,7 +602,7 @@ function slugifySourceId(input) {
     .replace(/^git@/, '')
     .replace(/[/:.#?=&]+/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
+    .replace(/(^-|-$)/g, '');
 
   return normalized || `source-${Date.now()}`;
 }
@@ -2663,6 +2756,75 @@ async function runAddCommand(source, targetDir, options) {
   console.log(`- agents_handbook_updated: ${agentsResult.created || agentsResult.updated ? 'yes' : 'no'}`);
 }
 
+function defaultKleverConfigTemplate() {
+  return {
+    scanMode: 'deep',
+    scanExecutor: 'auto',
+    scanMethod: 'deep',
+    write: true,
+    mcpClient: 'all',
+    mcpRegisterMode: 'auto',
+    mcpAll: true
+  };
+}
+
+async function runConfigCommand(parsed) {
+  const action = parsed.positional[1] || 'show';
+  if (!['init', 'show'].includes(action)) {
+    throw new Error('Usage: klever config <init|show> [target-dir] [--global]');
+  }
+
+  const targetArg = parsed.positional[2] || '.';
+  const root = path.resolve(process.cwd(), targetArg);
+  const useGlobal = Boolean(parsed.options.configGlobal);
+  const configPath = useGlobal ? globalConfigPath() : workspaceConfigPath(root);
+
+  if (action === 'init') {
+    if (!useGlobal && !(await pathExists(root))) {
+      throw new Error(`Target directory not found: ${root}`);
+    }
+    await mkdir(path.dirname(configPath), { recursive: true });
+    if ((await pathExists(configPath)) && !parsed.options.force) {
+      throw new Error(`Config file already exists: ${configPath} (use --force to overwrite)`);
+    }
+    await writeFile(configPath, JSON.stringify(defaultKleverConfigTemplate(), null, 2), 'utf8');
+    console.log('Klever config initialized');
+    console.log(`- scope: ${useGlobal ? 'global' : 'workspace'}`);
+    console.log(`- path: ${configPath}`);
+    return;
+  }
+
+  const globalConfig = await loadConfigFile(globalConfigPath());
+  const workspaceConfig = useGlobal
+    ? {}
+    : (await pathExists(root))
+      ? await loadConfigFile(workspaceConfigPath(root))
+      : {};
+  const merged = { ...globalConfig, ...workspaceConfig };
+  const payload = {
+    scope: useGlobal ? 'global' : 'workspace+global',
+    global_path: globalConfigPath(),
+    workspace_path: useGlobal ? null : workspaceConfigPath(root),
+    global_defaults: globalConfig,
+    workspace_defaults: workspaceConfig,
+    effective_defaults: merged
+  };
+  if (parsed.options.json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  console.log('Klever config');
+  console.log(`- scope: ${payload.scope}`);
+  console.log(`- global_path: ${payload.global_path}`);
+  if (payload.workspace_path) {
+    console.log(`- workspace_path: ${payload.workspace_path}`);
+  }
+  console.log('- effective_defaults:');
+  for (const [key, value] of Object.entries(payload.effective_defaults)) {
+    console.log(`  - ${key}: ${JSON.stringify(value)}`);
+  }
+}
+
 function scanPresetFromMode(modeInput) {
   const mode = normalizeScanMode(modeInput) || 'deep';
   if (mode === 'quick') {
@@ -2787,11 +2949,14 @@ async function main() {
     s: 'scan',
     m: 'mcp',
     a: 'add',
-    ad: 'addons'
+    ad: 'addons',
+    c: 'config'
   };
   const resolvedCommand = aliasMap[command] || command;
 
   try {
+    await applyPersistentDefaults(parsed, resolvedCommand);
+
     if (resolvedCommand === 'init' || resolvedCommand === 'wrap') {
       const targetArg = parsed.positional[1] || '.';
       await runScaffoldCommand(resolvedCommand, targetArg, parsed.options);
@@ -2827,6 +2992,11 @@ async function main() {
 
     if (resolvedCommand === 'mcp') {
       await runMcpCommand(parsed);
+      return;
+    }
+
+    if (resolvedCommand === 'config') {
+      await runConfigCommand(parsed);
       return;
     }
 

@@ -310,11 +310,11 @@ async function collectOrmModelMap(repositoryPath, moduleMap) {
   const modelEntries = [...modelsByName.values()]
     .map((item) => ({
       model: item.model,
-      modules: [...item.modules].sort(),
-      files: [...item.files].sort().slice(0, 12),
-      inheritance_links: [...item.inheritance_links].sort(),
-      delegated_links: [...item.delegated_links].sort(),
-      kinds: [...item.kinds].sort()
+      modules: [...item.modules].sort((a, b) => a.localeCompare(b)),
+      files: [...item.files].sort((a, b) => a.localeCompare(b)).slice(0, 12),
+      inheritance_links: [...item.inheritance_links].sort((a, b) => a.localeCompare(b)),
+      delegated_links: [...item.delegated_links].sort((a, b) => a.localeCompare(b)),
+      kinds: [...item.kinds].sort((a, b) => a.localeCompare(b))
     }))
     .sort((a, b) => a.model.localeCompare(b.model));
 
