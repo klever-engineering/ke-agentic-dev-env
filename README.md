@@ -76,6 +76,10 @@ klever config init .
 
 # inspect effective defaults (global + workspace merge)
 klever config show . --json
+
+# plan/apply workspace migrations between versions
+klever migrate . --plan
+klever migrate . --apply
 ```
 
 Short aliases:
@@ -84,6 +88,8 @@ Short aliases:
 - `klever m` -> `klever mcp`
 - `klever a` -> `klever add`
 - `klever ad` -> `klever addons`
+- `klever c` -> `klever config`
+- `klever mg` -> `klever migrate`
 
 `klever add` clones repositories into `repositories/<repo-name>` and updates `context-engineering/sources/catalog.yaml`.
 `klever scan` with no target runs against the current working directory and auto-scans the `repositories/` folder when present.
@@ -109,6 +115,30 @@ klever config show . --json
 
 Merge order is `global -> workspace -> explicit CLI flags`.
 This makes defaults predictable while still allowing one-off overrides.
+
+## Workspace Migration
+
+Klever writes workspace metadata to `.klever/workspace.json` during `init`/`wrap`.
+Use `migrate` to move existing workspaces between applied versions (example: `0.3.0 -> 0.4.0`):
+
+```bash
+# inspect inferred migration plan
+klever migrate . --plan
+
+# machine-readable check mode for automation
+klever migrate . --check --json
+
+# apply migration with automatic file backups
+klever migrate . --apply
+
+# rollback by snapshot id (from apply output)
+klever migrate . --rollback <snapshot-id>
+```
+
+Migration behavior:
+- idempotent writes (no-op when already up to date)
+- backup copies under `.klever/backups/<snapshot-id>/`
+- migration reports under `.klever/migrations/<snapshot-id>.json`
 
 `klever scan` now:
 - detects local coding agents (`codex`, `copilot`, `claude`, `gemini`) and allows delegating scan execution

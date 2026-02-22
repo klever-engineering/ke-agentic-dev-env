@@ -59,6 +59,7 @@ const KLEVER_CONFIG_KEYS = new Set([
   'mcpRegisterMode',
   'scanMode'
 ]);
+const DEFAULT_MIGRATION_TARGET_VERSION = '0.4.0';
 const TRUSTED_MCP_SERVER_CATALOG = [
   {
     id: 'github',
@@ -152,7 +153,13 @@ const FLAG_CONFIG = {
   '--all': { key: 'mcpAll', type: 'boolean' },
   '--register-mode': { key: 'mcpRegisterMode', type: 'value' },
   '--mode': { key: 'scanMode', type: 'value' },
-  '--global': { key: 'configGlobal', type: 'boolean' }
+  '--global': { key: 'configGlobal', type: 'boolean' },
+  '--from': { key: 'migrationFrom', type: 'value' },
+  '--to': { key: 'migrationTo', type: 'value' },
+  '--plan': { key: 'migrationPlan', type: 'boolean' },
+  '--apply': { key: 'migrationApply', type: 'boolean' },
+  '--check': { key: 'migrationCheck', type: 'boolean' },
+  '--rollback': { key: 'migrationRollback', type: 'value' }
 };
 
 function defaultOptions() {
@@ -183,7 +190,13 @@ function defaultOptions() {
     mcpAll: false,
     mcpRegisterMode: 'auto',
     scanMode: '',
-    configGlobal: false
+    configGlobal: false,
+    migrationFrom: '',
+    migrationTo: '',
+    migrationPlan: false,
+    migrationApply: false,
+    migrationCheck: false,
+    migrationRollback: ''
   };
 }
 
@@ -205,6 +218,7 @@ Usage:
   klever mcp install [target-dir] [options]
   klever config init [target-dir] [--global]
   klever config show [target-dir] [--global]
+  klever migrate [target-dir] [options]
 
 Commands:
   init    Create a fresh agentic workspace scaffold.
@@ -215,6 +229,7 @@ Commands:
   addons  List, install, and run addon packages in workspace internal toolkit.
   mcp     Suggest and register trusted MCP servers for VSCode/Codex/Claude.
   config  Manage persistent defaults (global and workspace).
+  migrate Plan/apply/rollback workspace migrations between Klever versions.
 
 Init/Wrap options:
   --profile <name>         Profile to apply (${profileList}).
@@ -258,6 +273,14 @@ MCP options:
 General:
   -h, --help               Show this help.
   --global                 Use global scope for config commands.
+
+Migrate options:
+  --from <version>         Source workspace version (default: inferred from manifest or 0.3.0 heuristic).
+  --to <version>           Target workspace version (default: ${DEFAULT_MIGRATION_TARGET_VERSION}).
+  --plan                   Print migration plan only (default action if none selected).
+  --apply                  Apply planned migration operations.
+  --check                  Check whether migration changes are pending.
+  --rollback <snapshot>    Roll back from snapshot id in .klever/backups/<snapshot>.
 `);
 }
 
@@ -352,11 +375,12 @@ function inferTargetDirForCommand(resolvedCommand, positional) {
   }
   if (resolvedCommand === 'mcp') return positional[2] || '.';
   if (resolvedCommand === 'config') return positional[2] || '.';
+  if (resolvedCommand === 'migrate') return positional[1] || '.';
   return positional[1] || '.';
 }
 
 async function applyPersistentDefaults(parsed, resolvedCommand) {
-  if (resolvedCommand === 'config') return;
+  if (resolvedCommand === 'config' || resolvedCommand === 'migrate') return;
 
   const globalPath = globalConfigPath();
   const globalConfig = await loadConfigFile(globalPath);
@@ -375,6 +399,336 @@ async function applyPersistentDefaults(parsed, resolvedCommand) {
     if (!parsed.provided.has(key)) {
       parsed.options[key] = value;
     }
+  }
+}
+
+let cachedCliVersion = '';
+
+async function getCliVersion() {
+  if (cachedCliVersion) return cachedCliVersion;
+  const packageJson = await readJsonFileSafe(new URL('../package.json', import.meta.url));
+  cachedCliVersion = packageJson?.version || '0.0.0';
+  return cachedCliVersion;
+}
+
+function defaultArtifactSchemaVersions() {
+  return {
+    scan_summary: '1.0.0',
+    source_map: '1.0.0',
+    mcp_install_summary: '1.0.0',
+    repository_intelligence: '1.0.0'
+  };
+}
+
+async function loadWorkspaceManifest(root) {
+  const manifestPath = path.join(root, '.klever', 'workspace.json');
+  const manifest = await readJsonFileSafe(manifestPath);
+  return {
+    path: manifestPath,
+    data: manifest && typeof manifest === 'object' ? manifest : null
+  };
+}
+
+async function ensureWorkspaceManifest(root, details = {}) {
+  const cliVersion = await getCliVersion();
+  const now = new Date().toISOString();
+  const manifestInfo = await loadWorkspaceManifest(root);
+  const existing = manifestInfo.data || {};
+  const next = {
+    schema_version: 1,
+    workspace_type: 'klever-agentic-workspace',
+    managed_by: '@klever/agentic-environment',
+    klever_version_applied: details.appliedVersion || existing.klever_version_applied || cliVersion,
+    profile: details.profile || existing.profile || 'foundation',
+    init_mode: details.initMode || existing.init_mode || 'init',
+    llm_provider: details.llmProvider || existing.llm_provider || '',
+    artifact_schema_versions: existing.artifact_schema_versions || defaultArtifactSchemaVersions(),
+    created_at: existing.created_at || now,
+    updated_at: now
+  };
+  const merged = { ...existing, ...next };
+  await mkdir(path.dirname(manifestInfo.path), { recursive: true });
+  await writeFile(manifestInfo.path, JSON.stringify(merged, null, 2), 'utf8');
+  return manifestInfo.path;
+}
+
+async function inferWorkspaceVersion(root) {
+  const manifestInfo = await loadWorkspaceManifest(root);
+  if (manifestInfo.data?.klever_version_applied) {
+    return manifestInfo.data.klever_version_applied;
+  }
+  const hasLegacyMarkers =
+    (await pathExists(path.join(root, 'AGENTS.md'))) &&
+    (await pathExists(path.join(root, 'agent-context.json'))) &&
+    (await pathExists(path.join(root, 'context-engineering')));
+  if (hasLegacyMarkers) {
+    return '0.3.0';
+  }
+  return '';
+}
+
+function relativeBackupPath(root, absolutePath) {
+  const rel = path.relative(root, absolutePath);
+  return rel.split(path.sep).join('/');
+}
+
+async function ensureBackupCopy(root, absolutePath, snapshotId) {
+  if (!(await pathExists(absolutePath))) return null;
+  const rel = relativeBackupPath(root, absolutePath);
+  const backupRoot = path.join(root, '.klever', 'backups', snapshotId);
+  const target = path.join(backupRoot, rel);
+  await mkdir(path.dirname(target), { recursive: true });
+  const raw = await readFile(absolutePath, 'utf8').catch(() => '');
+  await writeFile(target, raw, 'utf8');
+  return target;
+}
+
+async function listFilesRecursive(rootDir) {
+  const output = [];
+  if (!(await pathExists(rootDir))) return output;
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+      } else {
+        output.push(full);
+      }
+    }
+  }
+  return output;
+}
+
+function parseVersionNumbers(version) {
+  const match = String(version || '').trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareVersions(a, b) {
+  const left = parseVersionNumbers(a);
+  const right = parseVersionNumbers(b);
+  if (!left || !right) return 0;
+  if (left[0] !== right[0]) return left[0] - right[0];
+  if (left[1] !== right[1]) return left[1] - right[1];
+  return left[2] - right[2];
+}
+
+async function planMigration_0_3_0_to_0_4_0(root, fromVersion, toVersion) {
+  const manifestInfo = await loadWorkspaceManifest(root);
+  const existing = manifestInfo.data || {};
+  const cliVersion = await getCliVersion();
+  const now = new Date().toISOString();
+  const history = Array.isArray(existing.migration_history) ? [...existing.migration_history] : [];
+  history.push({
+    from: fromVersion,
+    to: toVersion,
+    at: now,
+    tool_version: cliVersion
+  });
+  const nextManifest = {
+    ...existing,
+    schema_version: 1,
+    workspace_type: existing.workspace_type || 'klever-agentic-workspace',
+    managed_by: '@klever/agentic-environment',
+    klever_version_applied: toVersion,
+    artifact_schema_versions: existing.artifact_schema_versions || defaultArtifactSchemaVersions(),
+    migration_history: history,
+    updated_at: now,
+    last_migrated_at: now
+  };
+  const ops = [
+    {
+      id: 'workspace-manifest-upsert',
+      type: 'write_json',
+      path: manifestInfo.path,
+      description: 'Create or update workspace manifest with applied version and migration history.',
+      content: JSON.stringify(nextManifest, null, 2)
+    }
+  ];
+  return {
+    migration_id: '0.3.0-to-0.4.0',
+    from: fromVersion,
+    to: toVersion,
+    operations: ops
+  };
+}
+
+async function buildMigrationPlan(root, fromVersion, toVersion) {
+  if (!fromVersion) {
+    throw new Error('Unable to infer source version. Use --from <version>.');
+  }
+  if (compareVersions(fromVersion, toVersion) > 0) {
+    throw new Error(`Downgrade migrations are not supported: ${fromVersion} -> ${toVersion}`);
+  }
+  if (fromVersion === toVersion) {
+    return {
+      migration_id: 'noop',
+      from: fromVersion,
+      to: toVersion,
+      operations: []
+    };
+  }
+  if (fromVersion === '0.3.0' && toVersion === '0.4.0') {
+    return planMigration_0_3_0_to_0_4_0(root, fromVersion, toVersion);
+  }
+  throw new Error(`No migration path available: ${fromVersion} -> ${toVersion}`);
+}
+
+async function annotateMigrationPlan(root, plan) {
+  const annotated = [];
+  for (const operation of plan.operations) {
+    const exists = await pathExists(operation.path);
+    const current = exists ? await readFile(operation.path, 'utf8').catch(() => '') : '';
+    let status = 'create';
+    if (exists && current === operation.content) status = 'noop';
+    if (exists && current !== operation.content) status = 'update';
+    annotated.push({
+      ...operation,
+      relative_path: path.relative(root, operation.path),
+      status
+    });
+  }
+  return { ...plan, operations: annotated };
+}
+
+async function applyMigrationPlan(root, plan, options) {
+  const snapshotId = new Date().toISOString().replace(/[:.]/g, '-');
+  const results = [];
+  for (const operation of plan.operations) {
+    if (operation.status === 'noop') {
+      results.push({ id: operation.id, status: 'skipped_noop', path: operation.relative_path });
+      continue;
+    }
+    await ensureBackupCopy(root, operation.path, snapshotId);
+    await mkdir(path.dirname(operation.path), { recursive: true });
+    await writeFile(operation.path, operation.content, 'utf8');
+    results.push({ id: operation.id, status: 'applied', path: operation.relative_path });
+  }
+
+  const reportDir = path.join(root, '.klever', 'migrations');
+  await mkdir(reportDir, { recursive: true });
+  const report = {
+    applied_at: new Date().toISOString(),
+    snapshot_id: snapshotId,
+    migration_id: plan.migration_id,
+    from: plan.from,
+    to: plan.to,
+    operations: results
+  };
+  const reportPath = path.join(reportDir, `${snapshotId}.json`);
+  await writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+
+  if (options.json) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log('Migration applied');
+    console.log(`- migration_id: ${plan.migration_id}`);
+    console.log(`- from: ${plan.from}`);
+    console.log(`- to: ${plan.to}`);
+    console.log(`- snapshot_id: ${snapshotId}`);
+    console.log(`- operations_applied: ${results.filter((item) => item.status === 'applied').length}`);
+    console.log(`- report: ${path.relative(root, reportPath)}`);
+  }
+}
+
+async function rollbackMigration(root, snapshotId, options) {
+  const backupRoot = path.join(root, '.klever', 'backups', snapshotId);
+  if (!(await pathExists(backupRoot))) {
+    throw new Error(`Backup snapshot not found: ${snapshotId}`);
+  }
+  const files = await listFilesRecursive(backupRoot);
+  let restored = 0;
+  for (const backupFilePath of files) {
+    const rel = path.relative(backupRoot, backupFilePath);
+    const target = path.join(root, rel);
+    const raw = await readFile(backupFilePath, 'utf8').catch(() => null);
+    if (raw === null) continue;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, raw, 'utf8');
+    restored += 1;
+  }
+  if (options.json) {
+    console.log(
+      JSON.stringify(
+        {
+          rolled_back_at: new Date().toISOString(),
+          snapshot_id: snapshotId,
+          restored_files: restored
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+  console.log('Rollback completed');
+  console.log(`- snapshot_id: ${snapshotId}`);
+  console.log(`- restored_files: ${restored}`);
+}
+
+async function runMigrateCommand(targetDir, options) {
+  const root = path.resolve(process.cwd(), targetDir || '.');
+  if (!(await pathExists(root))) {
+    throw new Error(`Target directory not found: ${root}`);
+  }
+
+  if (options.migrationRollback) {
+    await rollbackMigration(root, options.migrationRollback, options);
+    return;
+  }
+
+  const selectedModes = [options.migrationPlan, options.migrationApply, options.migrationCheck].filter(Boolean).length;
+  if (selectedModes > 1) {
+    throw new Error('Use only one of --plan, --apply, or --check at a time.');
+  }
+  const mode = options.migrationApply ? 'apply' : options.migrationCheck ? 'check' : 'plan';
+  const fromVersion = options.migrationFrom || (await inferWorkspaceVersion(root));
+  const toVersion = options.migrationTo || DEFAULT_MIGRATION_TARGET_VERSION;
+
+  const planRaw = await buildMigrationPlan(root, fromVersion, toVersion);
+  const plan = await annotateMigrationPlan(root, planRaw);
+  const pending = plan.operations.filter((item) => item.status !== 'noop');
+  if (mode === 'apply') {
+    await applyMigrationPlan(root, plan, options);
+    return;
+  }
+
+  const payload = {
+    generated_at: new Date().toISOString(),
+    mode,
+    workspace: root,
+    migration_id: plan.migration_id,
+    from: plan.from,
+    to: plan.to,
+    pending_operations: pending.length,
+    operations: plan.operations.map((item) => ({
+      id: item.id,
+      status: item.status,
+      path: item.relative_path,
+      description: item.description
+    }))
+  };
+  if (options.json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+  console.log('Migration plan');
+  console.log(`- mode: ${mode}`);
+  console.log(`- migration_id: ${payload.migration_id}`);
+  console.log(`- from: ${payload.from}`);
+  console.log(`- to: ${payload.to}`);
+  console.log(`- pending_operations: ${payload.pending_operations}`);
+  for (const operation of payload.operations) {
+    console.log(`- ${operation.status}: ${operation.path} (${operation.id})`);
+  }
+  if (mode === 'check' && pending.length > 0) {
+    console.log('- check_result: migration_required');
+  } else if (mode === 'check') {
+    console.log('- check_result: up_to_date');
   }
 }
 
@@ -2910,6 +3264,16 @@ async function runScaffoldCommand(command, targetArg, options) {
     console.log('- Dry-run: no files were written');
   }
 
+  if (!options.dryRun) {
+    const manifestPath = await ensureWorkspaceManifest(summary.targetDir, {
+      initMode: command,
+      profile: options.profile,
+      llmProvider: llmSetup.provider,
+      appliedVersion: await getCliVersion()
+    });
+    console.log(`- workspace_manifest: ${path.relative(summary.targetDir, manifestPath)}`);
+  }
+
   if (!options.dryRun && (await shouldBuildKnowledge(options, options.profile))) {
     console.log('\nRunning initial knowledge-layer build...');
     const exitCode = await runKnowledgeBuild(summary.targetDir, llmSetup.provider);
@@ -2950,7 +3314,8 @@ async function main() {
     m: 'mcp',
     a: 'add',
     ad: 'addons',
-    c: 'config'
+    c: 'config',
+    mg: 'migrate'
   };
   const resolvedCommand = aliasMap[command] || command;
 
@@ -2997,6 +3362,12 @@ async function main() {
 
     if (resolvedCommand === 'config') {
       await runConfigCommand(parsed);
+      return;
+    }
+
+    if (resolvedCommand === 'migrate') {
+      const targetArg = parsed.positional[1] || '.';
+      await runMigrateCommand(targetArg, parsed.options);
       return;
     }
 
