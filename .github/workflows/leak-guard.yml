@@ -1,0 +1,16 @@
+name: Leak Guard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  leak-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run leak guard
+        run: bash scripts/leak-guard.sh
